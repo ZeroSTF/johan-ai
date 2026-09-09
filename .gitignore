@@ -1,0 +1,35 @@
+# --- private: never in git ---
+# his chats, images, uploads, memories, transcripts
+/brain/
+# screening answers (salary, authorization)
+/job-hunter/answers.yaml
+# career fact store (personal) - add back deliberately if wanted
+/job-hunter/facts/
+# generated CVs and applications
+/job-hunter/staged/
+/job-hunter/submitted/
+/compose/.env*
+# holds the instance secret_key
+/searxng/settings.yml
+/.claude/
+*.pem
+*.key
+*secret*
+*credential*
+
+# --- generated / runtime ---
+/logs/
+/data/
+__pycache__/
+*.pyc
+/llamacpp/results.jsonl
+
+# --- third-party, models, environments (gigabytes) ---
+/comfyui/
+/venv-*/
+*.gguf
+*.safetensors
+*.ckpt
+
+# project brief with personal details - local only
+/CLAUDE.md

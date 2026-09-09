@@ -1,0 +1,73 @@
+networks:
+  johan:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: johan0
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  pgdata:
+  qdrantdata:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: johan-postgres
+    restart: unless-stopped
+    labels: [johan]
+    networks: [johan]
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: johan
+      POSTGRES_USER: johan
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../initdb:/docker-entrypoint-initdb.d:ro
+    cpuset: "8-15"
+    cpu_shares: 256
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U johan -d johan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: johan-qdrant
+    restart: unless-stopped
+    labels: [johan]
+    networks: [johan]
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrantdata:/qdrant/storage
+    cpuset: "8-15"
+    cpu_shares: 256
+    mem_limit: 1500m
+
+  # Web search for the assistant. Self-hosted rather than a paid search API:
+  # free with no query cap, no signup, and the queries never leave this
+  # machine. See CLAUDE.md "Web search — self-hosted SearXNG" for why the
+  # keyless scraping alternatives were rejected.
+  # Labelled `johan` so johan-pause/johan-resume (GameMode) pause it too.
+  searxng:
+    image: searxng/searxng:latest
+    container_name: johan-searxng
+    restart: unless-stopped
+    labels: [johan]
+    networks: [johan]
+    ports:
+      - "127.0.0.1:8888:8080"
+    environment:
+      SEARXNG_BASE_URL: "http://127.0.0.1:8888/"
+      SEARXNG_SECRET: ${SEARXNG_SECRET}
+    volumes:
+      - ../searxng/settings.yml:/etc/searxng/settings.yml:ro
+    cpuset: "8-15"
+    cpu_shares: 256
+    mem_limit: 512m

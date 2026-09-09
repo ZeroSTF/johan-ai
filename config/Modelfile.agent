@@ -1,0 +1,10 @@
+# johan-agent was built from qwen3.5:4b as of 2026-09-09 (blob sha256-81fb60c7…).
+# Re-pulling qwen3.5:4b now gets NEWER weights that scored worse (eval 2026-10-11).
+# Do not re-create johan-agent from this file without running eval_general/eval_tools/eval_decide.
+# num_gpu 99: Ollama 0.33 holds back ~1.7 GB for the vision encoder and left 3-4 of 34
+# layers on the CPU (30 tok/s). All layers on GPU: 52 tok/s, images still fit (5.2/6.1 GB).
+FROM qwen3.5:4b
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.3
+PARAMETER top_p 0.9
+PARAMETER num_gpu 99
