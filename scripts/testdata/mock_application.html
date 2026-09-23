@@ -1,0 +1,14 @@
+<html><head><title>Mock Application</title></head><body>
+<form id="application-form" onsubmit="window.__submitted = true; return false;">
+  <label for="fn">First Name*</label><input id="fn" name="first_name" required>
+  <label for="em">Email*</label><input id="em" name="email" type="email" required>
+  <label for="gh">GitHub Profile</label><input id="gh" name="github">
+  <label for="cv">Resume/CV</label><input id="cv" name="resume" type="file" required>
+  <fieldset><legend>Are you willing to relocate?</legend>
+    <label><input type="radio" name="reloc" value="y"> Yes</label>
+    <label><input type="radio" name="reloc" value="n"> No</label></fieldset>
+  <label for="cty">Country of residence*</label>
+  <select id="cty" name="country" required><option></option><option>France</option><option>Tunisia</option></select>
+  <label for="why">Tell us about your remote work experience</label><textarea id="why" name="why"></textarea>
+  <button type="submit" id="submit">Submit application</button>
+</form></body></html>
