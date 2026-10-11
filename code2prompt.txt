@@ -1,0 +1,39 @@
+Johan → one prompt file for an AI (code2prompt 4.x). Paste the block into a terminal.
+
+Output: ~/johan-codebase.md (outside ~/johan on purpose, so it never includes itself).
+Size today: ~183K tokens (46 project files + launchers + systemd units).
+
+How it stays correct as the project grows: it is an ALLOWLIST of file types
+(new scripts, configs, templates, Dockerfiles, units are picked up automatically)
+plus a DENYLIST of folders that are private, generated, secret or third-party.
+
+Never included:
+  brain/            his private chats, images, uploads, transcripts (Claude is barred from it)
+  logs/ data/       runtime output and Docker volumes
+  comfyui/ venv*/   third-party code, models, virtualenvs (gigabytes)
+  job-hunter/staged/ job-hunter/submitted/   generated CVs and applications
+  job-hunter/answers.yaml   his personal screening answers (salary, authorization)
+  searxng/settings.yml, .env*, *secret*, *credential*, *.pem, *.key   secrets
+  model weights (*.gguf, *.safetensors), __pycache__
+
+----------------------------------------------------------------------------
+{
+  code2prompt ~/johan -q -O - \
+    -i '**/*.py,**/*.sql,**/*.md,**/*.yml,**/*.yaml,**/*.tmpl,**/*.tex,**/*.sh,**/*.toml,**/*.cfg,**/*.ini,**/*.html,**/*.js,**/*.css,**/Dockerfile*,**/Modelfile*,**/*.service,**/*.timer,**/requirements*.txt' \
+    -e 'brain/**,comfyui/**,venv*/**,logs/**,data/**,job-hunter/staged/**,job-hunter/submitted/**,job-hunter/answers.yaml,searxng/settings.yml,**/__pycache__/**,**/.env*,**/*secret*,**/*credential*,**/*.pem,**/*.key,**/*.gguf,**/*.safetensors,code2prompt.txt'
+  echo; echo '# Outside ~/johan: launchers (~/bin)'
+  code2prompt ~/bin -q -O - -i 'johan*'
+  echo; echo '# Outside ~/johan: systemd user units (~/.config/systemd/user)'
+  code2prompt ~/.config/systemd/user -q -O - -i 'johan*' -e '*.wants/**'
+} > ~/johan-codebase.md && echo "wrote ~/johan-codebase.md ($(wc -c < ~/johan-codebase.md) bytes)"
+----------------------------------------------------------------------------
+
+Smaller variant (~122K instead of ~183K tokens): add these to the first -e list when the AI
+doesn't need tests, probes or the long history doc:
+  ,scripts/test_*.py,scripts/eval_*.py,scripts/probe_*.py,scripts/testdata/**,CLAUDE.md
+
+See what takes the most tokens:
+  code2prompt ~/johan --token-map -O /dev/null -i '<same -i>' -e '<same -e>'
+
+Also relevant but not copied (outside your home / root-owned):
+  /etc/gamemode.ini (johan-pause/resume hooks), /etc/sudoers.d/johan (stop/start ollama only)
