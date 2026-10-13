@@ -1,6 +1,6 @@
 # Johan
 
-A self-hosted personal AI assistant that runs entirely on one gaming PC — a
+A self-hosted personal AI assistant that runs entirely on one PC — a
 GTX 1660 Ti with **6 GB of VRAM** — with no paid APIs and nothing leaving the
 machine.
 
