@@ -1072,6 +1072,12 @@ def run_command(command, timeout=20):
     # just burns the conversation.
     argv = _strip_stderr_redirect(argv)
 
+    # There is no shell, so nothing expanded `~`: `find ~/johan` searched a
+    # directory literally named "~" and the model, told "No such file",
+    # concluded his project didn't exist. Expand it here; SENSITIVE still
+    # judges the expanded path (`~/.ssh` -> /home/zeros/.ssh is refused).
+    argv = [os.path.expanduser(a) if a.startswith("~") else a for a in argv]
+
     # Redirection and substitution stay refused: `>` writes a file and
     # backticks/$() splice in text that was never validated. Those genuinely
     # change what runs. `&&`, `||`, `;` and `|` do not — see _split_segments.

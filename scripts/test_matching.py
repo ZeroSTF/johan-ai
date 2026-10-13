@@ -209,6 +209,9 @@ def _err(cmd):
     return _jt.run_command(cmd).get("error")
 
 check("2>/dev/null is stripped, not refused", _err("ls /tmp 2>/dev/null") is None, True)
+check("~ is expanded (no shell does it)", "test_matching.py" in
+      _jt.run_command("ls ~/johan/scripts").get("output", ""), True)
+check("~/.ssh still refused after expansion", bool(_err("cat ~/.ssh/id_rsa")), True)
 check("2> /dev/null (spaced) is stripped", _err("ls /tmp 2> /dev/null") is None, True)
 check("2>&1 is stripped", _err("ls /tmp 2>&1") is None, True)
 check("&& chains allowlisted commands", _err("echo a && echo b") is None, True)
