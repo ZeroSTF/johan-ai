@@ -513,6 +513,12 @@ def handle_chat(bot, chat, text):
         if name == "generate_image" and isinstance(result, dict) and result.get("path"):
             bot.send_photo(chat, result["path"],
                            caption=f"{result.get('prompt', '')[:200]} · seed {result.get('seed')}")
+        # An always-allowed change RAN on the PC — say so in code, not only
+        # in whatever the model writes about it.
+        if name == "propose_action" and isinstance(result, dict) and result.get("auto_allowed"):
+            bot.send(chat, f"{'✅ Ran on your PC' if result.get('ok') else '⚠️ Ran on your PC and failed'}"
+                           f" (always-allowed): {'; '.join(result.get('steps') or [])}\n"
+                           f"{result.get('result', '')} · undo with `u` in F4 on the PC")
         if not state["buf"]:
             bot.edit(chat, placeholder, f"_running {name}…_")
 

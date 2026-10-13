@@ -69,7 +69,7 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 SLASH = ["/draw ", "/draw real ", "/draw landscape ", "/draw square ", "/research ", "/review",
          "/refresh",
-         "/retry", "/copy", "/new", "/history", "/jobs", "/images", "/edits",
+         "/retry", "/copy", "/new", "/history", "/jobs", "/images", "/edits", "/rules",
          "/help", "/theme"]
 
 # What each tool is DOING, in words — "searching the web" reads better than
@@ -578,6 +578,8 @@ HELP_MD = """\
 - `ctrl+p` — every action, searchable
 - `F2` history · `F3` jobs · `F4` changes · `F5` images
 - In Changes: `y` run/apply · `n` discard · `u` undo the last change (staged, you approve it)
+- `Y` (shift+y) on a change — run it and always allow that exact kind (one setting, one user
+  service, one container, folders in one place); never root, installs or file moves. `/rules` lists them
 - Ask for a change in chat — “install vlc”, “set super+v to copyq” — Johan stages it in F4;
   root steps open your system's password dialog. Nothing runs until you press `y`.
 - `esc` — stop the current answer
@@ -804,6 +806,7 @@ class EditsPane(Vertical):
     runs on its own; `y` is the only trigger."""
 
     BINDINGS = [Binding("y", "app.apply_edit", "run / apply"),
+                Binding("Y", "app.allow_change", "run + always allow"),
                 Binding("n", "app.discard_edit", "discard"),
                 Binding("u", "app.undo_change", "undo last change")]
 
@@ -833,6 +836,8 @@ class EditsPane(Vertical):
                 "“make super+v open copyq”, “in scripts/x.py change A to B” — it lands "
                 "here and runs only when you press [b]y[/b]."
                 + (f"\n\nRecent changes (u stages an undo of the last):{done}" if last else "")
+                + (f"\n\n{len(jx.load_rules())} always-allow rule(s) — /rules lists them"
+                   if jx.load_rules() else "")
                 + "[/]")
             return
         for r in self.rows:
@@ -903,7 +908,7 @@ class EditsPane(Vertical):
         if a["root"]:
             out.append("[$warning]Root steps open your system's password dialog — "
                        "Johan never sees the password.[/]")
-        out.append("[$text-muted]y run · n discard[/]")
+        out.append("[$text-muted]y run · Y run + always allow this kind · n discard[/]")
         self.query_one("#ediff", Static).update("\n".join(out))
 
 
@@ -920,6 +925,7 @@ class JohanCommands(Provider):
         ("Images", "images_tab", "everything Johan has drawn"),
         ("Changes", "edits_tab", "edits and machine changes waiting for approval"),
         ("Undo last change", "undo_change", "stages the undo of the last applied change"),
+        ("Always-allow rules", "list_rules", "changes that run without asking; /rules forget N"),
         ("Draw an image…", "start_draw", "puts /draw in the prompt"),
         ("Research something…", "start_research", "deep research, a few minutes"),
         ("Review my mistakes", "review", "self-review; proposals go to Edits"),
@@ -1299,6 +1305,12 @@ class JohanApp(App):
                               "err" if res.get("error") else "ok")
         if cmd == "/resume":
             return self._load_session(arg)
+        if cmd == "/rules":
+            if arg.split(" ")[0] in ("forget", "rm", "remove", "delete"):
+                res = jx.remove_rule(arg.split(" ")[-1])
+                return self._note(res.get("error") or f"forgot rule: {res['removed']}",
+                                  "err" if res.get("error") else "ok")
+            return self.action_list_rules()
         self._note(f"no command {cmd} — type / and press tab to see them", "err")
 
     # ------------------------------------------------------------ asking
@@ -1322,6 +1334,10 @@ class JohanApp(App):
             self.call_from_thread(setattr, self, "busy_label", VERBS.get(name, name))
             if name == "generate_image" and isinstance(result, dict) and result.get("path"):
                 self.call_from_thread(self._show_image, result)
+            if name == "propose_action" and isinstance(result, dict) and result.get("auto_allowed"):
+                self.call_from_thread(self._toast, result.get("result", ""),
+                                      f"change a{result.get('action_id')} ran (always allowed)",
+                                      not result.get("ok"))
 
         def on_delta(piece):
             self._stream_buf += piece
@@ -1599,9 +1615,9 @@ class JohanApp(App):
             self._toast(f"applied to {res['path']} (backup kept)", "edit applied")
 
     @work(thread=True)
-    def change_worker(self, aid):
+    def change_worker(self, aid, allow=False):
         try:
-            res = jx.run_action(aid)
+            res = jx.allow_and_run(aid) if allow else jx.run_action(aid)
         except Exception as e:
             res = {"error": f"{type(e).__name__}: {e}"}
         finally:
@@ -1613,8 +1629,29 @@ class JohanApp(App):
         else:
             self.call_from_thread(self._toast,
                                   jx.describe_result(res)
-                                  + (" · u to undo" if res.get("undo") else ""),
+                                  + (" · u to undo" if res.get("undo") else "")
+                                  + "".join(f" · always allowed now: {t}"
+                                            for t in res.get("rules_added") or []),
                                   f"change a{aid} applied")
+
+    def action_allow_change(self):
+        e = self.query_one(EditsPane).selected()
+        if not e or e["kind"] != "action":
+            return self._toast("Y always-allows machine changes, not file edits")
+        if getattr(self, "_running_change", False):
+            return self._toast("a change is already running", "wait")
+        self._running_change = True
+        self._toast("running, and allowing this kind from now on…", f"change a{e['id']}")
+        self.change_worker(e["id"], True)
+
+    def action_list_rules(self):
+        self.query_one("#main", TabbedContent).active = "tab-chat"
+        rules = jx.load_rules()
+        if not rules:
+            return self._note("no always-allow rules — Y on a change in F4 adds one", "ok")
+        self._note("always allowed (run without asking):\n"
+                   + "\n".join(f"  {i}. {jx.rule_text(r)}" for i, r in enumerate(rules, 1))
+                   + "\n/rules forget N removes one", "ok")
 
     def action_discard_edit(self):
         e = self.query_one(EditsPane).selected()

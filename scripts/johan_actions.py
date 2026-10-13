@@ -57,6 +57,8 @@ ROOT = Path.home() / "johan"
 PENDING = ROOT / "brain/pending-actions.json"
 LOG = ROOT / "brain/actions-log.json"
 LOG_KEEP = 60
+ALLOW_RULES = ROOT / "brain/allow-rules.json"
+AUTO_ALLOW = True        # the eval harness turns this off: a test must never change his machine
 HOME = Path.home().resolve()
 MAX_STEPS = 6
 
@@ -689,6 +691,22 @@ def propose_action(commands=None, why="", undo_last=False, _undo_of=None):
               "undo_of": _undo_of}
     pending.append(action)
     _save(PENDING, pending)
+    # An always-allow rule covers every step: run it now, through exactly
+    # the same run_action as `y` (re-validated, checked, logged, undoable),
+    # and hand the outcome back so the model reports it as done, not staged.
+    # Undos are never auto-run: `u` staging one means he wants to look.
+    if AUTO_ALLOW and _undo_of is None and covered_by_rules(steps):
+        res = run_action(aid, auto=True)
+        out = {"ran": True, "auto_allowed": True, "action_id": aid,
+               "steps": [s["what"] for s in steps], "ok": bool(res.get("ok")),
+               "verified": bool(res.get("verified")), "result": describe_result(res)}
+        if res.get("ok"):
+            out["note"] = ("ALREADY RUN — he always-allows this kind of change. Tell him "
+                           "it's done" + (" and checked" if res.get("verified") else "")
+                           + "; `u` in F4 undoes it.")
+        else:
+            out["error"] = f"it ran automatically and FAILED: {res.get('error')}"
+        return out
     return {"proposed": True, "action_id": aid,
             "steps": [s["what"] for s in steps],
             "needs_password": action["root"],
@@ -970,6 +988,133 @@ def propose_undo(aid=None):
                 e["undone"] = res["action_id"]
         _save(LOG, full)
     return res
+
+
+# ------------------------------------------------------------------ always-allow rules
+#
+# `Y` in F4 = run this and don't ask again for this exact kind of change.
+# Only kinds whose worst case is a setting he flips back or a service he
+# restarts can be rules, and each rule is program + subcommand + ONE target
+# (a gsettings key, a user unit, a container, a parent folder) — never "all
+# gsettings". Never: root steps, apt/flatpak (they pull in arbitrary
+# packages), gio trash/mv/cp/chmod (files), kill/pkill, docker pull.
+# The file is re-validated against this table on every load, so a rule
+# written into it by hand (or by anything else) for a forbidden kind is
+# ignored, not obeyed.
+
+ALLOWABLE = {
+    "gsettings": {"set", "reset"},
+    "systemctl --user": {"start", "stop", "restart"},
+    "docker": {"start", "stop", "restart"},
+    "gnome-extensions": {"enable", "disable"},
+    "mkdir": {"in"},
+}
+_TARGET = {
+    "gsettings": re.compile(r"^[A-Za-z0-9_.-]+(:/[A-Za-z0-9_/.-]+)? [A-Za-z0-9_-]+$"),
+    "systemctl --user": re.compile(r"^[A-Za-z0-9_@.:-]+$"),
+    "docker": re.compile(r"^[A-Za-z0-9_.-]+$"),
+    "gnome-extensions": re.compile(r"^[A-Za-z0-9_@.-]+$"),
+}
+WHY_NOT = ("only low-risk kinds can be always-allowed: gsettings set/reset of one key, "
+           "systemctl --user start/stop/restart of one unit, docker start/stop/restart "
+           "of one container, gnome-extensions enable/disable, mkdir in one folder")
+
+
+def _rule_valid(prog, sub, target):
+    if prog not in ALLOWABLE or sub not in ALLOWABLE[prog]:
+        return False
+    if not isinstance(target, str) or not target or len(target) > 300:
+        return False
+    if prog == "mkdir":
+        p = Path(target)
+        if not p.is_absolute() or os.path.normpath(target) != target:
+            return False
+        if not (p == HOME or HOME in p.parents) or ".git" in p.parts:
+            return False
+        if _jt().SENSITIVE.search(target):
+            return False
+        return not any(p == d or d in p.parents for d in PROTECTED_DIRS)
+    if not _TARGET[prog].match(target):
+        return False
+    return not (prog == "systemctl --user" and PROTECTED_UNITS.match(target))
+
+
+def _rule_of(step):
+    """The narrowest rule that covers `step` → (prog, sub, target), or
+    Refused saying why this kind can never be always-allowed."""
+    if step.get("root"):
+        raise Refused(f"`{step['shown']}` needs root — root steps are always approved "
+                      f"one at a time")
+    a = step["argv"]
+    prog = Path(a[0]).name
+    rule = None
+    if prog == "gsettings" and len(a) >= 4:
+        rule = ("gsettings", a[1], f"{a[2]} {a[3]}")
+    elif prog == "systemctl" and "--user" in a:
+        rule = ("systemctl --user", a[-2], a[-1])
+    elif prog in ("docker", "gnome-extensions") and len(a) == 3:
+        rule = (prog, a[1], a[2])
+    elif prog == "mkdir":
+        rule = ("mkdir", "in", str(Path(a[-1]).parent))
+    if rule is None or not _rule_valid(*rule):
+        raise Refused(f"`{step['shown']}` can't be always-allowed — {WHY_NOT}")
+    return rule
+
+
+def load_rules():
+    """Valid rules only — anything in the file outside ALLOWABLE is dropped."""
+    raw = _load(ALLOW_RULES, [])
+    return [r for r in (raw if isinstance(raw, list) else [])
+            if isinstance(r, dict) and _rule_valid(r.get("prog"), r.get("sub"), r.get("target"))]
+
+
+def rule_text(r):
+    if r["prog"] == "mkdir":
+        return f"create folders in {r['target']}"
+    return f"{r['prog']} {r['sub']} {r['target']}"
+
+
+def covered_by_rules(steps):
+    if not steps:
+        return False
+    have = {(r["prog"], r["sub"], r["target"]) for r in load_rules()}
+    try:
+        return all(_rule_of(s) in have for s in steps)
+    except Refused:
+        return False
+
+
+def allow_and_run(aid):
+    """`Y`: run a pending change and always allow its kind from now on. If
+    any step can't be a rule, NOTHING runs — he pressed Y expecting a rule,
+    and a silent run-once would be a surprise either way."""
+    action = next((a for a in list_actions() if a["id"] == int(aid)), None)
+    if not action:
+        return {"error": f"no pending change {aid}"}
+    try:
+        new = [_rule_of(s) for s in action["steps"]]
+    except Refused as e:
+        return {"error": f"not run — {e}. Press y to run it once.", "not_run": True}
+    res = run_action(aid)
+    if res.get("ok"):
+        rules = load_rules()
+        have = {(r["prog"], r["sub"], r["target"]) for r in rules}
+        stamp = datetime.now().isoformat(timespec="seconds")
+        added = [{"prog": p, "sub": s, "target": t, "added": stamp}
+                 for p, s, t in dict.fromkeys(new) if (p, s, t) not in have]
+        _save(ALLOW_RULES, rules + added)
+        res["rules_added"] = [rule_text(r) for r in added]
+    return res
+
+
+def remove_rule(n):
+    """Forget always-allow rule number `n` (1-based, as /rules lists them)."""
+    rules = load_rules()
+    if not str(n).isdigit() or not 1 <= int(n) <= len(rules):
+        return {"error": f"no rule {n} — /rules lists them"}
+    gone = rules.pop(int(n) - 1)
+    _save(ALLOW_RULES, rules)
+    return {"removed": rule_text(gone)}
 
 
 TOOL = {"type": "function", "function": {

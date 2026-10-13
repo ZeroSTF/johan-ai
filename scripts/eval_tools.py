@@ -295,6 +295,9 @@ def main():
     ja.EVAL_RUN = run_id
     print(f"eval run {run_id} — {len(cases)} cases\n")
 
+    # An always-allow rule would make a test prompt really change his machine.
+    import johan_tools as jt
+    jt._actions.AUTO_ALLOW = False
     before = _snapshot()
     results = []
     for i, case in enumerate(cases, 1):

@@ -48,8 +48,9 @@ def not_installed_pkg():
 
 def main():
     tmp = Path(tempfile.mkdtemp())
-    real_pending, real_log = jx.PENDING, jx.LOG
+    real_pending, real_log, real_rules = jx.PENDING, jx.LOG, jx.ALLOW_RULES
     jx.PENDING, jx.LOG = tmp / "pending.json", tmp / "log.json"
+    jx.ALLOW_RULES = tmp / "rules.json"
     scratch = Path.home() / ".cache/johan-actions-test"
     shutil.rmtree(scratch, ignore_errors=True)
     scratch.mkdir(parents=True)
@@ -156,6 +157,79 @@ def main():
         results["a bad step refuses the whole change before anything runs"] = (
             "error" in r and not (scratch / "a").exists())
 
+        # ---------------------------------------------------- always-allow rules
+        r = jx.propose_action(f"mkdir {scratch}/one", why="t")
+        run = jx.allow_and_run(r["action_id"])
+        results["Y runs it and adds a narrow rule (mkdir in that folder)"] = (
+            run.get("ok") and (scratch / "one").is_dir()
+            and run.get("rules_added") == [f"create folders in {scratch}"])
+        r = jx.propose_action(f"mkdir {scratch}/two", why="t")
+        results["a covered change runs at once, and says so to the model"] = (
+            r.get("ran") and r.get("auto_allowed") and r.get("ok") and r.get("verified")
+            and (scratch / "two").is_dir() and not jx.list_actions()
+            and "ALREADY RUN" in r.get("note", ""))
+        results["…logged as auto, and undoable like any other"] = (
+            jx.recent(1)[0].get("auto") is True
+            and jx.recent(1)[0]["undo"] == [f"rmdir {scratch}/two"])
+        r = jx.propose_action(f"mkdir {scratch}/one/deeper", why="t")
+        results["a rule covers ONE folder, not its subfolders"] = (
+            r.get("proposed") and not (scratch / "one/deeper").exists())
+        jx.discard_action(r["action_id"])
+        r = jx.propose_action(f"mkdir {scratch}/three && touch {scratch}/f.txt", why="t")
+        results["a change with any non-allowable step stays manual"] = (
+            r.get("proposed") and not (scratch / "three").exists())
+        run = jx.allow_and_run(r["action_id"])
+        results["Y on a non-allowable kind runs NOTHING and says why"] = (
+            run.get("not_run") and "can't be always-allowed" in run["error"]
+            and not (scratch / "f.txt").exists() and len(jx.load_rules()) == 1)
+        jx.discard_action(r["action_id"])
+        jx.AUTO_ALLOW = False
+        r = jx.propose_action(f"mkdir {scratch}/four", why="t")
+        jx.AUTO_ALLOW = True
+        results["AUTO_ALLOW off (the eval harness) → never auto-runs"] = (
+            r.get("proposed") and not (scratch / "four").exists())
+        jx.discard_action(r["action_id"])
+        results["remove_rule forgets it"] = (
+            "removed" in jx.remove_rule(1) and not jx.load_rules()
+            and "error" in jx.remove_rule(1))
+
+        # A rule file claiming forbidden kinds is ignored, not obeyed.
+        import json
+        jx.ALLOW_RULES.write_text(json.dumps([
+            {"prog": "apt", "sub": "install", "target": "cowsay"},
+            {"prog": "apt-get", "sub": "install", "target": "cowsay"},
+            {"prog": "touch", "sub": "in", "target": str(scratch)},
+            {"prog": "gio", "sub": "trash", "target": str(scratch)},
+            {"prog": "pkill", "sub": "", "target": "firefox"},
+            {"prog": "systemctl", "sub": "stop", "target": "ollama"},
+            {"prog": "systemctl --user", "sub": "stop", "target": "pipewire"},
+            {"prog": "systemctl --user", "sub": "disable", "target": "johan-telegram"},
+            {"prog": "docker", "sub": "pull", "target": "alpine"},
+            {"prog": "mkdir", "sub": "in", "target": "/etc"},
+            {"prog": "mkdir", "sub": "in", "target": f"{Path.home()}/../../etc"},
+            {"prog": "mkdir", "sub": "in", "target": str(jx.ROOT / "brain")},
+            {"prog": "mkdir", "sub": "in", "target": str(Path.home() / ".ssh")},
+            {"prog": "gsettings", "sub": "set", "target": "a.b k; rm -rf ~"},
+            "mkdir everything",
+        ]))
+        results["forbidden kinds in the rule file are dropped on load"] = jx.load_rules() == []
+        r = jx.propose_action(f"touch {scratch}/claimed.txt", why="t")
+        results["…so a claimed `touch` rule still waits for y"] = (
+            r.get("proposed") and not (scratch / "claimed.txt").exists())
+        jx.discard_action(r["action_id"])
+        try:
+            jx._rule_of({"root": True, "argv": ["systemctl", "start", "x"], "shown": "x"})
+            results["a root step can never be a rule"] = False
+        except jx.Refused:
+            results["a root step can never be a rule"] = True
+        st = staged("systemctl --user restart johan-telegram")
+        st2 = staged(f"gsettings set org.gnome.desktop.interface color-scheme {other}")
+        results["rules are program + subcommand + one target"] = (
+            st and jx._rule_of(st[0]) == ("systemctl --user", "restart", "johan-telegram")
+            and st2 and jx._rule_of(st2[0]) == ("gsettings", "set",
+                                                "org.gnome.desktop.interface color-scheme"))
+        jx.ALLOW_RULES.unlink()
+
         # ---------------------------------------------------- check after doing
         # rc 0 but nothing happened: the step must fail verification.
         real_exec = jx._exec
@@ -216,7 +290,8 @@ def main():
             "propose_action" in jt.DISPATCH
             and any(t["function"]["name"] == "propose_action" for t in jt.TOOLS))
     finally:
-        jx.PENDING, jx.LOG = real_pending, real_log
+        jx.PENDING, jx.LOG, jx.ALLOW_RULES = real_pending, real_log, real_rules
+        jx.AUTO_ALLOW = True
         shutil.rmtree(scratch, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)
 
