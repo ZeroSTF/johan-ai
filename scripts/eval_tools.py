@@ -165,6 +165,19 @@ CASES = [
          forbid=["propose_action"],
          why="a question about a setting must only READ it"),
 
+    # --- ask: options only when genuinely ambiguous -------------------------
+    dict(group="ask", prompt="what's my disk usage",
+         expect=["run_command", "system_status"], forbid=["ask"],
+         why="a clear request: asking 'which disk?' is slower than just looking"),
+    dict(group="ask", prompt="install htop",
+         expect=["propose_action"], forbid=["ask"],
+         why="one obvious reading; stage it, don't quiz him"),
+    dict(group="ask", prompt="what time is it?",
+         expect=["current_datetime"], forbid=["ask"]),
+    dict(group="ask", prompt="change my wallpaper",
+         expect=["ask"],
+         why="no picture, colour or source given — any guess is likely wrong"),
+
     # --- over-calling: answering without tools is the correct behaviour ----
     dict(group="restraint", prompt="hi", expect_none=True,
          why="reaching for a tool on a greeting is a real failure mode"),

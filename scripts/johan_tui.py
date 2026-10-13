@@ -62,6 +62,8 @@ import johan_tools as jt          # noqa: E402
 import johan_actions as jx        # noqa: E402
 import johan_commands as jc       # noqa: E402
 import apply_queue as aq          # noqa: E402
+import johan_plan as jp           # noqa: E402
+from johan_widgets import Choices, PlanCard  # noqa: E402
 
 try:                               # real pictures in WezTerm/kitty/sixel terminals
     from textual_image.widget import Image as TermImage
@@ -165,6 +167,7 @@ VERBS = {
     "run_python": "running Python", "deep_research": "researching",
     "autofill_application": "filling an application", "generate_image": "drawing",
     "search_conversations": "searching old chats", "scratchpad": "taking notes",
+    "ask": "asking you",
 }
 
 
@@ -1332,6 +1335,9 @@ class JohanApp(App):
         self._ticker = None
         self.turn_ids = {}       # index of the user message → jx turn id (for rewind)
         self.turn_tools = {}     # turn id → [(tool, args)] it called
+        self.pending = None        # Choices or PlanCard waiting for his pick
+        self.plan_card = None      # the approved plan whose checklist is ticking
+        self._asked = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="body"):
@@ -1390,6 +1396,7 @@ class JohanApp(App):
 
     def _fresh(self):
         self.messages = [{"role": "system", "content": ja.prime_with_memories(ja.SYSTEM_PROMPT)}]
+        self.pending = self.plan_card = None
         chat = self.query_one("#chat", ChatPane)
         chat.remove_children()
         chat.add(Welcome())
@@ -1402,7 +1409,8 @@ class JohanApp(App):
                 chat.add(UserMsg(m["content"]))
             elif m.get("role") == "assistant" and m.get("content"):
                 t = chat.add(Turn())
-                t.set_text(m["content"])
+                t.set_text(jp.render_plan(jp.parse_plan(m["content"]))
+                           if jp.is_plan_message(m) else m["content"])
                 t.activity.display = False
                 t.meta.update("")
                 self._remember_openables(m["content"])
@@ -1582,6 +1590,10 @@ class JohanApp(App):
         event.input.value = ""
         if text:
             self._submit(text)
+        elif self.pending is not None and not self.busy:
+            # enter on an empty prompt picks the highlighted option
+            (self.pending.choices if isinstance(self.pending, PlanCard)
+             else self.pending).action_pick()
 
     def _submit(self, text):
         if self.busy:
@@ -1591,6 +1603,9 @@ class JohanApp(App):
         self.history_pos = None
         if text.startswith("/"):
             return self._slash(text)
+        if isinstance(self.pending, PlanCard):
+            return self._replan(text)       # typed changes to the plan
+        self._retire_pending()              # a typed answer replaces the options
         self._ask(text)
 
     def _slash(self, text):
@@ -1667,20 +1682,92 @@ class JohanApp(App):
         self.turn_ids[len(self.messages)] = tid
         self.turn_tools[tid] = []
         self.messages.append({"role": "user", "content": text})
+        self._start_turn(plan_check=True)
+
+    def _start_turn(self, plan_check=False, replan=None):
         self.cancel.clear()
         self.turn = self._chat().add(Turn())
-        self._start_busy("thinking")
-        self.ask_worker()
+        self._start_busy("planning" if replan else "thinking")
+        self.ask_worker(plan_check, replan)
+
+    # ---- ask-with-options and plan-first (johan_plan.py, johan_widgets.py)
+
+    def _retire_pending(self):
+        p, self.pending = self.pending, None
+        if isinstance(p, PlanCard):
+            p.superseded()
+        elif p is not None:
+            p.retire()
+
+    def _replan(self, changes):
+        self._chat().add(UserMsg(changes))
+        self._start_turn(replan=changes)
+
+    def _show_plan(self, turn, steps):
+        """A plan instead of an answer: nothing runs until he picks go."""
+        turn.remove()
+        if not steps:              # a re-plan that failed: the old plan still waits
+            self._note("couldn't rewrite the plan — the one above still stands", "err")
+            return self._finish(focus=getattr(self.pending, "choices", self.pending))
+        self._retire_pending()
+        card = self._chat().add(PlanCard(steps))
+        self.pending = card
+        self._finish(focus=card.choices)
+
+    def _show_choices(self, asked):
+        self._retire_pending()
+        ch = self._chat().add(Choices(asked["options"]))
+        self.pending = ch
+        ch.focus()
+
+    def on_choices_picked(self, event: Choices.Picked):
+        owner = self.pending
+        if self.busy or owner is None:
+            return
+        if isinstance(owner, PlanCard) and event.choices is owner.choices:
+            self.pending = None
+            if event.index == 0:
+                jp.approve(self.messages)
+                owner.start()
+                self.plan_card = owner
+                self._start_turn()
+            else:
+                jp.cancel(self.messages)
+                owner.cancelled()
+                self._finish()
+            return
+        if event.choices is owner:
+            self._submit(event.text)        # the pick is his next message
 
     @work(thread=True)
-    def ask_worker(self):
+    def ask_worker(self, plan_check=False, replan=None):
         turn = self.turn
+        self._asked = None
+        q = ja._last_user_message(self.messages)
+        # Plan-first: a regex costs nothing, so only messages it flags pay
+        # for the calibrated check, and only a "yes" pays for the plan call.
+        if replan is not None or (plan_check and jp.prefilter(q)):
+            steps = []
+            try:
+                if replan is not None or jp.needs_plan(q):
+                    self.busy_label = "planning"
+                    steps = jp.make_plan(self.messages, changes=replan)
+            except Exception:
+                steps = []
+            if steps or replan is not None:
+                self.call_from_thread(self._show_plan, turn, steps)
+                return
 
         tid = jx.TURN
 
         def on_tool(name, args, result):
             self.turn_tools.setdefault(tid, []).append((name, args))
             self.call_from_thread(turn.add_step, name, args, result)
+            card = self.plan_card
+            if card is not None:
+                self.call_from_thread(card.tick, name, jp.failed_result(result))
+            if name == "ask" and isinstance(result, dict) and result.get("asked"):
+                self._asked = result
             self.call_from_thread(setattr, self, "busy_label", VERBS.get(name, name))
             if name == "generate_image" and isinstance(result, dict) and result.get("path"):
                 self.call_from_thread(self._show_image, result)
@@ -1697,13 +1784,15 @@ class JohanApp(App):
                 self.call_from_thread(turn.set_text, self._stream_buf)
                 self.call_from_thread(self._chat().scroll_end, animate=False)
 
-        interrupted = False
+        interrupted, reply = False, None
         try:
             self._stream_buf, self._stream_last = "", 0.0
             reply = ja.run_turn(self.messages, on_tool=on_tool, on_delta=on_delta,
                                 should_stop=self.cancel.is_set)
             interrupted = self.cancel.is_set()
             text = reply or self._stream_buf or "(no answer — try rephrasing)"
+            if self._asked:
+                text = self._asked["question"]     # the options show below as choices
             self.call_from_thread(turn.set_text, text)
             for r in ja.LAST_LEARNED:           # a correction became a rule
                 self.call_from_thread(self._toast, f"{escape(r['text'])}\n/forget {r['memory_id']} to undo",
@@ -1712,8 +1801,13 @@ class JohanApp(App):
         except Exception as e:
             self.call_from_thread(self._note, f"{type(e).__name__}: {e}", "err")
         finally:
+            card, self.plan_card = self.plan_card, None
+            if card is not None:
+                self.call_from_thread(card.finish, bool(reply), interrupted)
             self.call_from_thread(turn.finish, interrupted)
             self.call_from_thread(self._finish)
+            if self._asked and not interrupted:
+                self.call_from_thread(self._show_choices, self._asked)
 
     def _show_image(self, result):
         self._chat().add(ImageCard(result))
@@ -1721,7 +1815,7 @@ class JohanApp(App):
             self.openables.append(result["path"])
         self.query_one(ImagesPane).load()
 
-    def _finish(self):
+    def _finish(self, focus=None):
         jx.end_turn()
         self._stop_busy()
         self._chat().scroll_end(animate=False)
@@ -1732,7 +1826,7 @@ class JohanApp(App):
             except Exception:
                 pass
         try:
-            self.query_one("#prompt", Input).focus()
+            (focus or self.query_one("#prompt", Input)).focus()
         except Exception:
             pass
         try:
@@ -1990,7 +2084,11 @@ class JohanApp(App):
     def action_interrupt(self):
         """Esc stops generation mid-sentence, so a misread question costs
         seconds, not the whole answer."""
-        if not self.busy or getattr(self, "_rewinding", False):
+        if getattr(self, "_rewinding", False):
+            return
+        if not self.busy:
+            if isinstance(self.pending, PlanCard):
+                self.pending.choices.pick(1)      # esc on a waiting plan = cancel
             return
         self.cancel.set()
         self.busy_label = "stopping"
