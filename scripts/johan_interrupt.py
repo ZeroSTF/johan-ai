@@ -20,6 +20,7 @@ Two parts:
 """
 
 import contextlib
+import contextvars
 import http.client
 import json
 import queue
@@ -144,10 +145,15 @@ def run_stoppable(fn, *args, **kwargs):
     if getattr(_TL, "fn", None) is None:
         return fn(*args, **kwargs)
     box = {}
+    # The tool runs in a new thread, and a new thread starts with an EMPTY
+    # context: the big-page reader's question (a ContextVar) silently
+    # vanished, so long pages fell back to their first 3,000 chars whenever
+    # esc-stoppable tools were on. Run it inside a copy of this context.
+    ctx = contextvars.copy_context()
 
     def work():
         try:
-            box["v"] = fn(*args, **kwargs)
+            box["v"] = ctx.run(fn, *args, **kwargs)
         except BaseException as e:     # noqa: BLE001
             box["e"] = e
     t = threading.Thread(target=work, daemon=True, name="johan-tool")

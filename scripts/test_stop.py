@@ -145,7 +145,18 @@ async def main():
     check(f"a stalled tool gives way to esc ({time.monotonic() - t0:.2f}s)",
           raised and time.monotonic() - t0 < 1.5)
 
-    # 5. without a stop signal nothing changes
+    # 5. the tool thread sees the turn's context (the reader's question):
+    # a fresh thread starts with an empty context, so long pages fell back
+    # to their first 3,000 chars whenever esc-stoppable tools were on.
+    import johan_reader as jr
+    jr.set_question("how do I remap controls")
+    got = {}
+    with ji.stoppable(threading.Event().is_set):
+        ji.run_stoppable(lambda: got.setdefault("q", jr._QUESTION.get()))
+    check("a stoppable tool still sees the reader's question",
+          got.get("q") == "how do I remap controls")
+
+    # 6. without a stop signal nothing changes
     check("no stop signal: tools run normally", ji.run_stoppable(lambda: 42) == 42)
 
 
