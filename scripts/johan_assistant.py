@@ -717,7 +717,7 @@ def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
         messages.append({"role": "assistant", "content": report})
         return report
     if not _is_trivial(q):
-        _skills.inject(messages, q)        # a matching recipe from skills/, appended
+        _skills.inject(messages, q)        # a matching recipe from skills/, before his message
     answer = run_turn_loop(messages, max_hops=max_hops, on_tool=on_tool,
                            on_delta=on_delta, should_stop=should_stop)
     if VERIFY_ANSWERS and answer and not answer.startswith("(interrupted"):

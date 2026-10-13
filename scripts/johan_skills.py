@@ -15,9 +15,12 @@ before hop 0 the user's message is matched against them:
     of each file, so an edited skill is re-embedded and nothing else is
   - at most ONE skill, and only above THRESHOLD (measured — see
     test_skills.py --measure for the labeled set and the numbers)
-  - the skill is APPENDED to the conversation as a system message after his
-    message. Appending keeps the cached prefix (system prompt + tool schemas)
-    intact; changing the system prompt per turn would re-read all of it.
+  - the skill goes into the conversation as a system message just BEFORE
+    his new message. Everything before it is unchanged, so the cached prefix
+    (system prompt + tool schemas + earlier turns) is kept; changing the
+    system prompt per turn would re-read all of it. Before, not after: with
+    the skill as the LAST message the model answered an English question in
+    French in 2 of 3 tries; with his message last, 0 of 2 (2026-10-13).
 
 Cost on a turn that matches nothing: one embedding of his message (~0.1 s).
 Greetings and very short messages skip even that.
@@ -151,8 +154,8 @@ def match(message, threshold=None, embed=None):
 
 
 def inject(messages, message, embed=None):
-    """Append the matching skill to `messages` (once per conversation per
-    skill). Returns the skill's name, or None."""
+    """Insert the matching skill just before his message (once per
+    conversation per skill). Returns the skill's name, or None."""
     s = match(message, embed=embed)
     if not s:
         return None
@@ -160,7 +163,8 @@ def inject(messages, message, embed=None):
     if any(m.get("role") == "system" and str(m.get("content", "")).startswith(tag)
            for m in messages):
         return None               # already in this conversation's context
-    messages.append({"role": "system", "content":
+    at = len(messages) - 1 if messages and messages[-1].get("role") == "user" else len(messages)
+    messages.insert(at, {"role": "system", "content":
                      f"{tag} (a recipe for this machine; follow it where it fits "
                      f"what he asked, ignore it if it doesn't). Run the read-only "
                      f"checks YOURSELF with run_command — don't ask him to type "

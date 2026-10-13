@@ -172,9 +172,10 @@ def unit():
         js.THRESHOLD = 0.5
         try:
             name = js.inject(msgs, msgs[-1]["content"], embed=fake_embed)
-            check("inject appends ONE system message after his message",
-                  name == "no-sound" and len(msgs) == 3 and msgs[-1]["role"] == "system"
-                  and msgs[-1]["content"].startswith(js.MARK) and msgs[0]["content"] == "sys")
+            check("inject puts ONE system message just before his message",
+                  name == "no-sound" and len(msgs) == 3 and msgs[1]["role"] == "system"
+                  and msgs[1]["content"].startswith(js.MARK) and msgs[0]["content"] == "sys"
+                  and msgs[-1]["role"] == "user")
             msgs.append({"role": "user", "content": "my headphones have no sound still"})
             again = js.inject(msgs, msgs[-1]["content"], embed=fake_embed)
             check("the same skill is not injected twice in one conversation",
