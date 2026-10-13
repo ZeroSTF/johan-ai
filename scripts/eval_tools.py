@@ -22,6 +22,7 @@ failures can be inspected afterwards rather than re-run.
 """
 
 import argparse
+import re
 import json
 import sys
 import time
@@ -181,6 +182,12 @@ CASES = [
     # --- over-calling: answering without tools is the correct behaviour ----
     dict(group="restraint", prompt="hi", expect_none=True,
          why="reaching for a tool on a greeting is a real failure mode"),
+    dict(group="restraint", prompt="hello", expect_none=True, english=True,
+         why="answered 'Salut. Quoi de neuf ?' 4/7 times. Cause, found by ablation: "
+             "'in Tunisia' in the persona line + a 'reply in the language he "
+             "writes in' rule that primed language-switching; each alone ~0/6 "
+             "French when removed. Fixed with an explicit English default"),
+    dict(group="restraint", prompt="good morning", expect_none=True, english=True),
     dict(group="restraint", prompt="my cat knocked my coffee over",
          expect_none=True,
          why="he's TELLING, not asking: it searched memory, then the verifier "
@@ -298,6 +305,12 @@ def run_case(case, run_id):
     need = case.get("contains")
     if need and need.lower() not in (answer or "").lower().replace(",", ""):
         reasons.append(f"answer missing {need!r}")
+    if case.get("english"):
+        # Whole words only — "est" inside "best" must not count.
+        fr = re.findall(r"\b(salut|bonjour|quoi|tu|vous|je|est|ça|c'est|avec|pour|une|des)\b",
+                        answer or "", re.I)
+        if len(fr) >= 2:
+            reasons.append(f"answered in French to an English message ({', '.join(fr[:4])})")
 
     return dict(case=case, used=used, answer=answer or "", ok=not reasons,
                 reason="; ".join(reasons), seconds=seconds)
