@@ -39,7 +39,3 @@ each. It never submits anything; it hands over a link and a PDF.
 
 Python · Ollama · Postgres · Qdrant · bge-m3 (CPU) · SearXNG · Textual ·
 Playwright · ComfyUI · Docker · Tectonic
-
-## Note on history
-
-Git history reconstructed from the development log; dates and order are real.
