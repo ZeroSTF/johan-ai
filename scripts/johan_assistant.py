@@ -56,6 +56,9 @@ import johan_tools as jt              # noqa: E402
 # query) silently evicts the conversation and the assistant starts answering
 # from nothing. Individual tools truncate too — this is the backstop.
 MAX_TOOL_CHARS = 2400
+# fetch_page returns up to johan_reader.READER_CHARS of the page chosen by
+# relevance; the backstop must not then chop that selection in half.
+TOOL_CHAR_CAPS = {"fetch_page": 4000}
 
 OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"
 # JOHAN_MODEL lets the evals score another model through the same code path.
@@ -400,6 +403,7 @@ TOOLS = TOOLS + jt.TOOLS
 import johan_research as _research  # noqa: E402
 import johan_autofill as _autofill  # noqa: E402
 import johan_images as _images  # noqa: E402
+import johan_reader as _reader  # noqa: E402
 TOOLS = TOOLS + [_research.TOOL, _autofill.TOOL, _images.TOOL]
 DISPATCH["generate_image"] = _images.generate_image
 DISPATCH["deep_research"] = _research.deep_research
@@ -626,8 +630,9 @@ def execute_tool(call, seen, hop, user_message, should_stop=None):
                   ok=not err, error=str(err)[:500] if err else None,
                   duration_ms=int((time.monotonic() - started) * 1000),
                   result_chars=len(payload))
-    if len(payload) > MAX_TOOL_CHARS:
-        payload = payload[:MAX_TOOL_CHARS] + '..."[truncated]"}'
+    cap = TOOL_CHAR_CAPS.get(name, MAX_TOOL_CHARS)
+    if len(payload) > cap:
+        payload = payload[:cap] + '..."[truncated]"}'
     return name, args, result, payload
 
 
@@ -719,6 +724,7 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
     tells the user nothing, while "web_search(...)" makes it legible.
     `tools` optionally narrows the schema to a shortlist."""
     user_message = _last_user_message(messages)
+    _reader.set_question(_reader.question_from(messages))   # long pages read by relevance
     seen = {}
     for hop in range(max_hops):
         # On the final hop, take the tools away and demand an answer.
