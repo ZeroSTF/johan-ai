@@ -1,0 +1,18 @@
+# johan-uncensored — the model behind /uncensored.
+# HauhauCS "Aggressive" uncensoring of Qwen3.5-4B (Q4_K_M + vision), chosen
+# 2026-10-13 for the lowest reported capability loss (KL ~0.02) among 4B
+# uncensored builds. Same family and tool-call format as johan-agent, so
+# every tool works unchanged. Parameters mirror johan-agent.
+FROM hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M
+# Same built-in Qwen3.5 prompt renderer and tool-call parser as johan-agent.
+# Without them Ollama runs the GGUF's own Jinja template, which raises
+# "System message must be at the beginning" on Johan's mid-conversation
+# system notes (skills, the answer-now note) — 6 of 40 eval cases died in 0.2 s.
+RENDERER qwen3.5
+PARSER qwen3.5
+PARAMETER num_gpu 99
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.3
+PARAMETER top_k 20
+PARAMETER top_p 0.9
+PARAMETER presence_penalty 1.5

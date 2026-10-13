@@ -66,10 +66,10 @@ ANSWER_PROMPT = (
     "and direct.")
 
 FIX_PROMPT = (
-    "[Johan, internal] Check that answer against the tool results and what "
-    "I said earlier in this chat. Rewrite it so it states only facts and "
-    "numbers that appear there, exactly as they appear, and says plainly what "
-    "was not found. Keep my language and your normal tone. "
+    "[Johan, internal] Check that answer against the tool results above. "
+    "Rewrite it so it states only facts and numbers that appear in those "
+    "results, exactly as they appear, and says plainly what was not found. "
+    "Keep my language and your normal tone. "
     "Reply with the corrected answer only.")
 
 _ANSWER_STEP = re.compile(r"\b(answer|respond|reply|summari[sz]e|tell (him|riadh|me|the user)|report)\b", re.I)

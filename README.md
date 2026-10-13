@@ -56,6 +56,7 @@ Type `/` and press **tab** to complete.
 | `/review` | Johan looks at its own recent mistakes and proposes fixes |
 | `/rules` | list "always allow" rules (`/rules forget N` removes one) |
 | `/forget <id>` | delete something Johan learned or remembered |
+| `/uncensored`, `/normal` | swap to an uncensored model for this chat, and back (same tools; a new chat starts normal) |
 | `/theme`, `/help` | |
 
 **Your own commands:** drop a markdown file in `commands/` and it becomes a
@@ -194,6 +195,7 @@ The same assistant from my phone (only my account can use it):
 | `/draw [landscape] …` | draw; send a photo with a `/draw …` caption to redraw it |
 | `/remember`, `/memory`, `/forget <id>` | memory |
 | `/tasks`, `/task <text>`, `/finish <id>` | tasks |
+| `/uncensored`, `/normal` | swap models, same as in the app |
 | `/status`, `/refresh`, `/new`, `/help` | |
 
 Options come as buttons. Changes to the PC can be *proposed* from the phone
