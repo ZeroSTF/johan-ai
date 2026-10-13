@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import johan_assistant as ja      # noqa: E402
 import johan_tools as jt          # noqa: E402
 import apply_queue as aq          # noqa: E402
+import johan_plan as jp           # noqa: E402
 
 API = "https://api.telegram.org/bot{token}/{method}"
 TG_LIMIT = 4000                   # Telegram hard-caps a message at 4096
@@ -71,6 +72,7 @@ class Bot:
         self.session = requests.Session()
         self.histories = {}
         self.pending_ref = {}          # chat -> picture he sent without a caption
+        self.pending = {}              # chat -> buttons waiting for a press (ask / plan)
         self.offset = self._load_offset()
 
     # ---------------------------------------------------------- transport
@@ -91,7 +93,7 @@ class Bot:
             print(f"[tg] {method} network error: {type(e).__name__}", flush=True)
             return {"ok": False}
 
-    def send(self, chat, text, reply_to=None):
+    def send(self, chat, text, reply_to=None, reply_markup=None):
         """Send text, split to fit Telegram's limit.
 
         Markdown is attempted then abandoned on failure: model output contains
@@ -99,28 +101,32 @@ class Bot:
         silently drop the whole message, which looks like the bot ignoring
         you."""
         sent = None
-        for chunk in split_message(text):
+        chunks = split_message(text)
+        for n, chunk in enumerate(chunks):
+            extra = ({"reply_markup": reply_markup}
+                     if reply_markup and n == len(chunks) - 1 else {})
             body = self.call("sendMessage", chat_id=chat, text=chunk,
                              parse_mode="Markdown",
                              link_preview_options={"is_disabled": True},
-                             reply_to_message_id=reply_to)
+                             reply_to_message_id=reply_to, **extra)
             if not body.get("ok"):
                 body = self.call("sendMessage", chat_id=chat, text=chunk,
-                                 link_preview_options={"is_disabled": True})
+                                 link_preview_options={"is_disabled": True}, **extra)
             sent = body.get("result", {}).get("message_id") or sent
             reply_to = None
         return sent
 
-    def edit(self, chat, message_id, text):
+    def edit(self, chat, message_id, text, reply_markup=None):
         if not message_id:
             return
         text = text[:TG_LIMIT]
+        extra = {"reply_markup": reply_markup} if reply_markup else {}
         body = self.call("editMessageText", chat_id=chat, message_id=message_id,
                          text=text, parse_mode="Markdown",
-                         link_preview_options={"is_disabled": True})
+                         link_preview_options={"is_disabled": True}, **extra)
         if not body.get("ok"):
             self.call("editMessageText", chat_id=chat, message_id=message_id,
-                      text=text, link_preview_options={"is_disabled": True})
+                      text=text, link_preview_options={"is_disabled": True}, **extra)
 
     def typing(self, chat):
         self.call("sendChatAction", chat_id=chat, action="typing", http_timeout=10)
@@ -494,27 +500,133 @@ def handle_chat(bot, chat, text):
         return
 
     history = bot.history(chat)
+    pend = bot.pending.pop(chat, None)
+    if pend:
+        _drop_buttons(bot, chat, pend)
+        if pend["kind"] == "plan":
+            # Text while a plan waits = his changes to it.
+            if not propose_plan(bot, chat, changes=text):
+                bot.pending[chat] = pend
+                bot.edit(chat, pend["message_id"], pend["text"],
+                         reply_markup=keyboard(pend["id"], pend["labels"]))
+                bot.send(chat, "Couldn't rewrite the plan — the one above still stands.")
+            return
     history.append({"role": "user", "content": text})
+    # Plan-first: the regex is free; only what it flags pays for the check.
+    if jp.prefilter(text) and jp.needs_plan(text) and propose_plan(bot, chat):
+        return
+    run_chat_turn(bot, chat)
+
+
+# ---- buttons: ask-with-options and plan approval (johan_plan.py) ---------
+
+def keyboard(pid, labels):
+    """One button per row; callback_data carries the question id so a press
+    on an old, already-answered question is recognised as stale."""
+    return {"inline_keyboard": [[{"text": label[:60], "callback_data": f"{pid}:{i}"}]
+                                for i, label in enumerate(labels)]}
+
+
+def _new_pending(bot, chat, kind, labels, text, message_id, **extra):
+    pid = f"{int(time.time() * 1000) % 10**9:x}"
+    bot.pending[chat] = {"kind": kind, "id": pid, "labels": labels, "text": text,
+                         "message_id": message_id, **extra}
+    return pid
+
+
+def _drop_buttons(bot, chat, pend):
+    if pend.get("message_id"):
+        bot.call("editMessageReplyMarkup", chat_id=chat, message_id=pend["message_id"],
+                 reply_markup={"inline_keyboard": []})
+
+
+PLAN_LABELS = ["✅ Go ahead", "✖ Cancel"]
+
+
+def propose_plan(bot, chat, changes=None):
+    """One model call; the plan waits for a button. False if no usable plan."""
+    bot.typing(chat)
+    steps = jp.make_plan(bot.history(chat), changes=changes)
+    if not steps:
+        return False
+    text = (f"*Plan* — nothing runs until you say go:\n{jp.render_plan(steps)}"
+            f"\n\n_Or reply with changes._")
+    pid = _new_pending(bot, chat, "plan", PLAN_LABELS, text, None, steps=steps)
+    bot.pending[chat]["message_id"] = bot.send(chat, text,
+                                               reply_markup=keyboard(pid, PLAN_LABELS))
+    return True
+
+
+def handle_callback(bot, cq):
+    """A button press. Same allowlist as messages, checked FIRST: a
+    stranger's press gets one refusal and reaches no model, tool or data."""
+    msg = cq.get("message") or {}
+    chat = msg.get("chat", {}).get("id")
+    if chat is None or not bot.allowed or chat not in bot.allowed:
+        who = cq.get("from", {})
+        print(f"[tg] REFUSED button from chat {chat} (@{who.get('username')})", flush=True)
+        bot.call("answerCallbackQuery", callback_query_id=cq.get("id"),
+                 text="This bot is private.")
+        return
+    pend = bot.pending.get(chat)
+    pid, _, idx = (cq.get("data") or "").partition(":")
+    if not pend or pend["id"] != pid or not idx.isdigit() or int(idx) >= len(pend["labels"]):
+        bot.call("answerCallbackQuery", callback_query_id=cq.get("id"),
+                 text="That question has expired.")
+        return
+    bot.call("answerCallbackQuery", callback_query_id=cq.get("id"))
+    bot.pending.pop(chat, None)
+    i = int(idx)
+    choice = pend["labels"][i]
+    bot.edit(chat, pend["message_id"], f"{pend['text']}\n\n→ _{choice}_")
+    if pend["kind"] == "ask":
+        handle_chat(bot, chat, choice)          # the pick is his next message
+    elif i == 0:
+        if not ollama_up():
+            bot.pending[chat] = pend
+            bot.send(chat, "Ollama is stopped (GameMode?) — press go again after.")
+            return
+        jp.approve(bot.history(chat))
+        run_chat_turn(bot, chat, progress=jp.Progress(pend["steps"]))
+    else:
+        jp.cancel(bot.history(chat))
+        bot.send(chat, jp.CANCELLED)
+
+
+def run_chat_turn(bot, chat, progress=None):
+    """Run the engine on the history as it stands (his message, or a plan
+    approval, already appended). With a plan, the placeholder carries its
+    checklist, ticked as tool calls land — every edit, checklist or
+    streamed text, shares the one ~1.5 s throttle."""
+    history = bot.history(chat)
     bot.typing(chat)
 
-    placeholder = bot.send(chat, "…")
-    state = {"buf": "", "last": 0.0, "tools": []}
+    head = (lambda: progress.text() + "\n\n") if progress else (lambda: "")
+    placeholder = bot.send(chat, head() + "…")
+    state = {"buf": "", "last": 0.0, "tools": [], "asked": None}
+
+    def refresh(tail, force=False):
+        now = time.monotonic()
+        if force or now - state["last"] >= 1.5:
+            state["last"] = now
+            bot.edit(chat, placeholder, head() + tail)
 
     def on_delta(piece):
         state["buf"] += piece
-        now = time.monotonic()
-        if now - state["last"] >= 1.5:
-            state["last"] = now
-            bot.edit(chat, placeholder, state["buf"] + " ▌")
+        refresh(state["buf"] + " ▌")
 
     def on_tool(name, args, result):
         state["tools"].append(name)
         bot.typing(chat)
+        if progress:
+            progress.on_tool(name, jp.failed_result(result))
+        if name == "ask" and isinstance(result, dict) and result.get("asked"):
+            state["asked"] = result
         if name == "generate_image" and isinstance(result, dict) and result.get("path"):
             bot.send_photo(chat, result["path"],
                            caption=f"{result.get('prompt', '')[:200]} · seed {result.get('seed')}")
         if not state["buf"]:
-            bot.edit(chat, placeholder, f"_running {name}…_")
+            refresh(f"_running {name}…_", force=not progress)
 
     try:
         reply = ja.run_turn(history, on_tool=on_tool, on_delta=on_delta)
@@ -522,8 +634,17 @@ def handle_chat(bot, chat, text):
         traceback.print_exc()
         bot.edit(chat, placeholder, f"Something broke: {type(e).__name__}: {e}")
         return
+    if progress:
+        progress.finish(answered=bool(reply))
 
-    final = (reply or state["buf"] or "(no answer)").strip()
+    asked = state["asked"]
+    if asked:
+        text = head() + asked["question"]
+        pid = _new_pending(bot, chat, "ask", asked["options"], text, placeholder)
+        bot.edit(chat, placeholder, text, reply_markup=keyboard(pid, asked["options"]))
+        return
+
+    final = head() + (reply or state["buf"] or "(no answer)").strip()
 
     # Trim history so a long day of chatting can't outgrow the context window
     if len(history) > HISTORY_TURNS:
@@ -544,6 +665,8 @@ def handle_chat(bot, chat, text):
 
 
 def handle_update(bot, update):
+    if update.get("callback_query"):
+        return handle_callback(bot, update["callback_query"])
     msg = update.get("message") or update.get("edited_message")
     if not msg:
         return
@@ -614,7 +737,7 @@ def run(bot):
         # http_timeout must exceed it or requests aborts every poll.
         body = bot.call("getUpdates", http_timeout=POLL_TIMEOUT + 15,
                         offset=bot.offset, timeout=POLL_TIMEOUT,
-                        allowed_updates=["message"])
+                        allowed_updates=["message", "callback_query"])
         for update in body.get("result", []) or []:
             bot.offset = update["update_id"] + 1
             try:

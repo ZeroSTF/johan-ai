@@ -25,7 +25,7 @@ class FakeBot(tg.Bot):
 
     def call(self, method, http_timeout=40, files=None, **params):
         self.calls.append((method, params))
-        return {"message_id": len(self.calls), "username": "fakebot"}
+        return {"ok": True, "result": {"message_id": len(self.calls), "username": "fakebot"}}
 
     def texts(self):
         return [p.get("text", "") for m, p in self.calls if m in ("sendMessage", "editMessageText")]
@@ -107,6 +107,138 @@ def draw_checks():
     return results
 
 
+def press(chat, data, from_id=None, message_id=1):
+    return {"callback_query": {"id": "cb1", "data": data,
+                               "from": {"id": from_id or chat, "username": "x"},
+                               "message": {"message_id": message_id, "chat": {"id": chat}}}}
+
+
+def markups(bot):
+    """Every inline keyboard the bridge sent, as (labels, callback_data)."""
+    out = []
+    for m, p in bot.calls:
+        kb = (p.get("reply_markup") or {}).get("inline_keyboard")
+        if kb:
+            out.append(([b["text"] for row in kb for b in row],
+                        [b["callback_data"] for row in kb for b in row]))
+    return out
+
+
+def button_checks():
+    """Ask-with-options and plan approval as inline buttons, engine and
+    planner stubbed — no model. The allowlist must hold for button presses
+    exactly as for messages."""
+    import johan_plan as jp
+    results, turns = {}, []
+    real = (ja.run_turn, tg.ollama_up, jp.needs_plan, jp.make_plan)
+
+    def fake_turn(history, on_tool=None, on_delta=None, **k):
+        turns.append(history[-1]["content"])
+        if history[-1]["content"] == "change my wallpaper":
+            res = jp.ask("Which wallpaper?", ["A photo of mine", "Generate one"])
+            on_tool("ask", {}, res)
+            history.append({"role": "assistant", "content": jp.render_ask(res)})
+            return jp.render_ask(res)
+        if history[-1]["content"] == jp.GO_PROMPT:
+            on_tool("run_command", {}, {"output": "docker not installed"})
+            on_tool("propose_action", {}, {"staged": 1})
+            return "Staged the install — approve it in F4."
+        return "ok"
+    plans = []
+
+    def fake_make_plan(history, changes=None, **k):
+        plans.append(changes)
+        history.extend([{"role": "user", "content": jp.PLAN_PROMPT},
+                        {"role": "assistant", "content": '{"steps": []}'}])
+        return [{"do": "Check docker", "tool": "run_command"},
+                {"do": "Stage the install", "tool": "propose_action"}]
+    ja.run_turn, tg.ollama_up, jp.make_plan = fake_turn, (lambda: True), fake_make_plan
+    jp.needs_plan = lambda text, **k: False
+    try:
+        # --- ask -> buttons -> press -> his next message
+        bot = FakeBot({ME})
+        tg.handle_update(bot, update(ME, "change my wallpaper"))
+        kbs = markups(bot)
+        results["ask: options sent as inline buttons"] = bool(kbs) and kbs[-1][0] == [
+            "A photo of mine", "Generate one"]
+        data = kbs[-1][1][1] if kbs else "x:1"
+
+        n = len(turns)
+        tg.handle_update(bot, press(STRANGER, data))
+        results["stranger's button press refused"] = any(
+            m == "answerCallbackQuery" and "private" in p.get("text", "") for m, p in bot.calls)
+        results["stranger's press reached no model"] = len(turns) == n
+        results["…and the question is still his"] = ME in bot.pending
+
+        pairing = FakeBot(set())
+        pairing.pending[STRANGER] = {"kind": "ask", "id": "a", "labels": ["x", "y"],
+                                     "text": "q", "message_id": 1}
+        tg.handle_update(pairing, press(STRANGER, "a:0"))
+        results["pairing mode: button refused too"] = (len(turns) == n
+                                                       and STRANGER in pairing.pending)
+
+        tg.handle_update(bot, press(ME, data))
+        results["his press sends the option as his message"] = turns[-1] == "Generate one"
+        results["…and the buttons are gone"] = ME not in bot.pending
+
+        tg.handle_update(bot, press(ME, data))
+        results["stale press says expired, runs nothing"] = turns[-1] == "Generate one" and any(
+            "expired" in p.get("text", "") for m, p in bot.calls if m == "answerCallbackQuery")
+
+        # --- typed answer instead of a button
+        bot = FakeBot({ME})
+        tg.handle_update(bot, update(ME, "change my wallpaper"))
+        tg.handle_update(bot, update(ME, "use the one in ~/Pictures/cat.png"))
+        results["typed answer works and drops the buttons"] = (
+            turns[-1] == "use the one in ~/Pictures/cat.png" and ME not in bot.pending
+            and any(m == "editMessageReplyMarkup" for m, _ in bot.calls))
+
+        # --- plan -> go -> checklist
+        jp.needs_plan = lambda text, **k: True
+        bot = FakeBot({ME})
+        n = len(turns)
+        tg.handle_update(bot, update(ME, "install docker and add me to the docker group"))
+        kbs = markups(bot)
+        results["plan: shown with go/cancel, nothing ran"] = (
+            bool(kbs) and kbs[-1][0] == tg.PLAN_LABELS and len(turns) == n)
+        go = kbs[-1][1][0] if kbs else "x:0"
+        tg.handle_update(bot, press(STRANGER, go))
+        results["plan: stranger's go runs nothing"] = len(turns) == n
+        tg.handle_update(bot, press(ME, go))
+        results["plan: go runs the approved plan"] = turns[-1] == jp.GO_PROMPT
+        edits = [p.get("text", "") for m, p in bot.calls if m == "editMessageText"]
+        results["checklist: final message ticks both steps"] = bool(edits) and (
+            "Plan 2/2" in edits[-1] and edits[-1].count("✓") == 2 and "F4" in edits[-1])
+
+        # --- plan -> typed changes -> re-plan; then cancel
+        bot = FakeBot({ME})
+        tg.handle_update(bot, update(ME, "install docker and add me to the docker group"))
+        tg.handle_update(bot, update(ME, "use podman instead"))
+        results["plan: typed text re-plans with his changes"] = plans[-1] == "use podman instead"
+        n = len(turns)
+        cancel = markups(bot)[-1][1][1]
+        tg.handle_update(bot, press(ME, cancel))
+        results["plan: cancel runs nothing and says so"] = len(turns) == n and any(
+            jp.CANCELLED in t for t in bot.texts())
+        results["…and is recorded in history"] = bot.history(ME)[-1]["content"] == jp.CANCELLED
+
+        # --- edits are throttled (Telegram rate-limits them)
+        def chatty(history, on_tool=None, on_delta=None, **k):
+            for _ in range(50):
+                on_delta("tok ")
+            return "done"
+        ja.run_turn = chatty
+        bot = FakeBot({ME})
+        bot.history(ME).append({"role": "user", "content": "x"})
+        tg.run_chat_turn(bot, ME, progress=jp.Progress([{"do": "a", "tool": "none"},
+                                                        {"do": "b", "tool": "none"}]))
+        edits = [p for m, p in bot.calls if m == "editMessageText"]
+        results["50 streamed tokens -> throttled edits (<= 2 + final)"] = len(edits) <= 3
+    finally:
+        ja.run_turn, tg.ollama_up, jp.needs_plan, jp.make_plan = real
+    return results
+
+
 def main():
     results = {}
     engine_calls = []
@@ -142,6 +274,7 @@ def main():
         ja.run_turn = real_run_turn
 
     results.update(draw_checks())
+    results.update(button_checks())
 
     saved = {k: os.environ.pop(k, None) for k in ("DISPLAY", "WAYLAND_DISPLAY")}
     try:
