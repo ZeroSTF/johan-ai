@@ -76,7 +76,8 @@ CASES = [
     dict(group="basics", prompt="what is today's date?",
          expect=["current_datetime"]),
     dict(group="basics", prompt="how much VRAM is free right now?",
-         expect=["system_status"]),
+         expect=["system_status", "run_command"],
+         why="nvidia-smi via run_command is an equally correct way to read VRAM"),
 
     # --- live data --------------------------------------------------------
     dict(group="live", prompt="what's the latest version of fastapi?",
