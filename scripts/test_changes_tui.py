@@ -40,24 +40,55 @@ async def drive(scratch):
     async with app.run_test(size=(150, 46)) as pilot:
         await pilot.pause(0.5)
 
-        # --- Y: run and always allow
+        prompt = app.query_one("#prompt")
+
+        # --- a change waiting from earlier shows up as a card in the chat
         r = jx.propose_action(f"mkdir {scratch}/box", why="tidy the test folder")
-        await pilot.press("f4")
-        await pilot.pause(0.5)
-        app.query_one(tui.EditsPane).load(focus=True)
+        app._show_backlog()
         await pilot.pause(0.3)
-        await pilot.press("Y")
-        out["Y ran the change"] = await wait_for(
+        card = app.backlog_card
+        out["a waiting change shows as a card in the chat"] = (
+            card is not None and card.earlier and not (scratch / "box").exists())
+        out["…offering 'always allow' for a rule-able change"] = card is not None and len(card.options) == 3
+        out["…starting on No, so a habitual enter can't approve it"] = (
+            card is not None and card.choices.index == len(card.options) - 1)
+        await pilot.press("2")
+        out["2 runs it"] = await wait_for(
             pilot, lambda: (scratch / "box").is_dir() and not jx.list_actions())
-        out["…and saved a rule for that folder"] = [jx.rule_text(x) for x in jx.load_rules()] == [
+        out["…and saves a rule for that folder"] = [jx.rule_text(x) for x in jx.load_rules()] == [
             f"create folders in {scratch}"]
         r = jx.propose_action(f"mkdir {scratch}/box2", why="t")
         out["the next matching change runs without asking"] = (
             r.get("auto_allowed") and (scratch / "box2").is_dir())
 
-        # --- /rules lists them
-        await pilot.press("f4")
-        prompt = app.query_one("#prompt")
+        # --- several waiting: one after another; 3 = no
+        jx.remove_rule(1)
+        jx.propose_action(f"mkdir {scratch}/a1", why="t")
+        jx.propose_action(f"mkdir {scratch}/a2", why="t")
+        app._show_backlog()
+        await pilot.pause(0.3)
+        await pilot.press("3")
+        await wait_for(pilot, lambda: app.backlog_card is not None
+                       and app.backlog_card.item.get("steps", [{}])[0].get("shown", "").endswith("a2"))
+        out["3 declines it and the next one is shown"] = (
+            not (scratch / "a1").exists() and app.backlog_card is not None)
+
+        # --- typing instead leaves it waiting for next time
+        prompt.focus()
+        prompt.value = "/rules"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        out["typing leaves the change waiting"] = (
+            app.backlog_card is None and len(jx.list_actions()) == 1
+            and not (scratch / "a2").exists())
+        jx.discard_action(jx.list_actions()[0]["id"])
+
+        # --- /rules lists them; forget removes
+        r = jx.propose_action(f"mkdir {scratch}/box3", why="t")
+        app._show_backlog()
+        await pilot.pause(0.3)
+        await pilot.press("2")
+        await wait_for(pilot, lambda: (scratch / "box3").is_dir())
         prompt.focus()
         prompt.value = "/rules"
         await pilot.press("enter")
@@ -68,7 +99,20 @@ async def drive(scratch):
         await pilot.pause(0.3)
         out["/rules forget 1 removes it"] = not jx.load_rules()
 
+        # --- /changes lists, /changes undo asks and reverts
+        prompt.value = "/changes"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        out["/changes lists recent changes"] = "recent changes" in notes(app)
+        prompt.value = "/changes undo"
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+        out["/changes undo asks with a card"] = app.backlog_card is not None
+        await pilot.press("1")
+        out["…1 reverts the last change"] = await wait_for(pilot, lambda: not (scratch / "box3").exists())
+
         # --- rewind with nothing changed: instant, question back in the box
+        await wait_for(pilot, lambda: app.backlog_card is None)
         sys_msg = app.messages[0]
         app.messages = [sys_msg]
         tid = jx.new_turn()

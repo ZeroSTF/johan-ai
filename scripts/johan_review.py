@@ -4,12 +4,12 @@ Roadmap step 6. Runs at login (systemd user timer, code only — no GPU, so it
 can never hold VRAM when a game starts) or by hand:
 
     python johan_review.py            # analyse the last 7 days, report only (no GPU)
-    python johan_review.py --stage    # + verify recipes with the model, stage for F4
+    python johan_review.py --stage    # + verify recipes with the model, stage for his OK
     python johan_review.py --days 30
     python johan_review.py --gate     # run the tool eval, compare to baseline
 
 What it does NOT do: change behaviour on its own. Every fix is staged with
-propose_edit and applied only when Riadh presses `y` in F4, and `--gate` runs
+propose_edit and applied only when Riadh OKs it (shown as a card in the chat), and `--gate` runs
 the eval so an approved batch is checked before it is trusted. A 4B model
 editing its own prompt unreviewed is the fastest way to make it worse.
 
@@ -279,7 +279,7 @@ def write_report(result, low, staged, days):
     path = REVIEWS / f"{datetime.now():%Y-%m-%d}.md"
     L = [f"# Johan self-review — {datetime.now():%Y-%m-%d %H:%M}",
          f"\nLast {days} days: {result['turns']} real turns. "
-         f"{len(staged)} proposals staged — review them in F4.\n",
+         f"{len(staged)} proposals staged — they show up in Johan's chat for your OK.\n",
          "## Failure clusters (tool · error · count)"]
     for (tool, err), cl in sorted(result["clusters"].items(), key=lambda kv: -kv[1]["count"]):
         tag = " — FIXED since (re-ran the same call, it works now)" if cl["fixed"] else ""
@@ -294,7 +294,7 @@ def write_report(result, low, staged, days):
     L += [f"- “{(r['message'] or '')[:90]}” — {len(r['candidates'])} call(s) to verify"
           for r in result["recipes"]] or ["- none"]
     L.append("\nRun `/review` in Johan (or `python johan_review.py --stage`) to verify "
-             "these against the model and stage the best — at most 5 — in F4. Expect "
+             "these against the model and stage the best — at most 5 — for your OK. Expect "
              "to reject some: the check knows a result is RELATED to the question, "
              "not that it was the right way to answer it.")
     L.append("\n## After approving proposals\nRun `python johan_review.py --gate` — "
@@ -332,7 +332,7 @@ def main():
     ap.add_argument("--gate", action="store_true")
     ap.add_argument("--stage", action="store_true",
                     help="verify recipe candidates with the model and stage "
-                         "proposals for F4 (the login run is report-only: no GPU)")
+                         "proposals for your OK (the login run is report-only: no GPU)")
     a = ap.parse_args()
     if a.gate:
         return gate()

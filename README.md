@@ -30,7 +30,6 @@ back earlier questions. **esc** stops an answer immediately.
 | — | **Chat** | talking to Johan |
 | **F2** | **History** | browse, reopen or delete past chats (`d` twice deletes) |
 | **F3** | **Jobs** | the apply queue |
-| **F4** | **Changes** | anything that couldn't be approved in the chat, and recent changes |
 | **F5** | **Images** | everything Johan has drawn |
 | **F1** | Help | all of this, inside the app |
 
@@ -51,7 +50,8 @@ Type `/` and press **tab** to complete.
 | `/rewind` | undo the last question, answer and anything it changed |
 | `/copy` | copy the last answer |
 | `/new`, `/history` | fresh chat, past chats |
-| `/jobs`, `/images`, `/edits` | jump to a screen |
+| `/jobs`, `/images` | jump to a screen |
+| `/changes` | what Johan changed lately; `/changes undo` undoes the last one |
 | `/refresh` | fetch new job postings (~20 min, in the background) |
 | `/review` | Johan looks at its own recent mistakes and proposes fixes |
 | `/rules` | list "always allow" rules (`/rules forget N` removes one) |
@@ -123,9 +123,10 @@ step does, the exact command, whether it needs root, and how it will be undone.
 
 Code edits work the same way: the card shows the diff.
 
-**F4 Changes** only holds what couldn't be asked in the chat (Johan's
-self-review proposals, or a root change proposed from the phone) plus recent
-changes, with **u** to undo the last one.
+Changes proposed while I'm not there to answer (Johan's self-review, my phone,
+a one-shot `johan "…"`) show up as the same cards the next time I open Johan.
+`/changes` lists what was changed lately, and `/changes undo` undoes the last
+one (asked like any other change).
 
 ### Big requests: plan first
 
@@ -206,7 +207,7 @@ The same assistant from my phone (only my account can use it):
 
 Options come as buttons, and so do changes: **Run it / Always allow / No**,
 after which Johan carries on with the result. Changes that need the root
-password can only be approved at the PC.
+password wait for the PC, where they show up in the chat.
 
 ---
 

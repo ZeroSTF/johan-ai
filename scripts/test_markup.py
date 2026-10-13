@@ -125,16 +125,16 @@ async def main():
                           "pdf": "/tmp/" + NASTY[0] + "/cv.pdf", "url": ALL}]
             check("jobs details pane", lambda: pane._detail(0))
 
-            # --- changes: a staged change and an edit ----------------------
-            edits = app.query_one(tui.EditsPane)
-            check("changes pane loads", lambda: edits.load())
+            # --- changes: cards for a waiting change and edit, and /changes --
+            check("waiting change card", lambda: app._show_backlog())
             await settle()
-            check("change details", lambda: edits._show(0))
-            check("edit diff", lambda: edits._show(1))
-            jx.PENDING.write_text("[]")
-            jt.PENDING_EDITS.write_text("[]")
+            check("waiting edit card", lambda: chat.mount(jw.ApprovalCard(
+                "edit", json.loads(jt.PENDING_EDITS.read_text())[0], earlier=True)))
+            check("inline approval card", lambda: chat.mount(jw.ApprovalCard(
+                "action", {**json.loads(jx.PENDING.read_text())[0], "can_always": True})))
             jx.LOG.write_text(json.dumps([{"id": 9, "ok": True, "why": ALL, "undo": []}]))
-            check("changes empty state with recent changes", lambda: edits.load())
+            check("/changes listing", lambda: app.action_changes(""))
+            await settle()
 
             # --- options and plan checklist --------------------------------
             check("multiple-choice options", lambda: chat.mount(jw.Choices(NASTY, hint=ALL)))

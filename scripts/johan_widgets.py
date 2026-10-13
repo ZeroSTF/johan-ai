@@ -339,9 +339,12 @@ class ApprovalCard(_Vertical):
     """
     MAX_DIFF_LINES = 40
 
-    def __init__(self, kind, item, **kw):
+    def __init__(self, kind, item, earlier=False, **kw):
         super().__init__(**kw)
         self.kind, self.item = kind, item
+        # earlier=True: proposed while no one could answer (self-review, the
+        # phone, one-shot `johan "…"`) and shown when the app opens.
+        self.earlier = earlier
         if kind == "action":
             opts = ["Yes, run it"]
             if item.get("can_always"):
@@ -357,6 +360,10 @@ class ApprovalCard(_Vertical):
                  "Yes, and always allow this kind": "always allow", "No": "no"}
         nums = " · ".join(f"{i} {short[o]}" for i, o in enumerate(opts, 1))
         self.choices = Choices(opts, hint=f"{nums} · or type what you want instead · esc stops")
+        if earlier:
+            # A card from earlier is focused when Johan opens: an enter out of
+            # habit must not approve something old — start on "No".
+            self.choices.index = len(opts) - 1
 
     def compose(self):
         yield Static(self._title(), classes="ap-title")
@@ -366,9 +373,11 @@ class ApprovalCard(_Vertical):
     def _title(self):
         if self.kind == "action":
             root = " [b $error]needs your password[/]" if self.item.get("root") else ""
-            return mk("[b $warning]⏵ Johan wants to change something" + root + "[/]  [$text-muted]$w[/]",
+            head = "⏵ Waiting from earlier: a change" if self.earlier else "⏵ Johan wants to change something"
+            return mk(f"[b $warning]{head}" + root + "[/]  [$text-muted]$w[/]",
                       w=self.item.get("why") or "")
-        return mk("[b $warning]⏵ Johan wants to edit[/] [b]$p[/]  [$text-muted]$w[/]",
+        head = "⏵ Waiting from earlier: an edit to" if self.earlier else "⏵ Johan wants to edit"
+        return mk(f"[b $warning]{head}[/] [b]$p[/]  [$text-muted]$w[/]",
                   p=self.item.get("path", "?"), w=self.item.get("why") or "")
 
     def _body(self):

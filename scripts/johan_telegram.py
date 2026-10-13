@@ -594,14 +594,14 @@ def offer_approval(bot, chat, tool, result, more=0):
         steps = "\n".join(f"• {s['what']}\n  `{s['shown']}`" for s in action["steps"])
         if action["root"]:
             text = (f"*Change waiting:*\n{steps}\n\n_This needs your password, which only "
-                    f"works on the PC — approve it in F4 there._")
+                    f"works on the PC — it'll be waiting in Johan's chat there._")
             labels = [NO]
         else:
             text = f"*Change waiting:*\n{steps}"
             labels = [RUN] + ([ALWAYS] if jx.can_always(action["steps"]) else []) + [NO]
         item = {"kind": "action", "id": action["id"]}
     if more:
-        text += f"\n\n_{more} more waiting in F4 on the PC._"
+        text += f"\n\n_{more} more waiting in Johan's chat on the PC._"
     pid = _new_pending(bot, chat, "approve", labels, text, None, item=item)
     bot.pending[chat]["message_id"] = bot.send(chat, text, reply_markup=keyboard(pid, labels))
 
@@ -717,7 +717,7 @@ def run_chat_turn(bot, chat, progress=None):
         if name == "propose_action" and isinstance(result, dict) and result.get("auto_allowed"):
             bot.send(chat, f"{'✅ Ran on your PC' if result.get('ok') else '⚠️ Ran on your PC and failed'}"
                            f" (always-allowed): {'; '.join(result.get('steps') or [])}\n"
-                           f"{result.get('result', '')} · undo with `u` in F4 on the PC")
+                           f"{result.get('result', '')} · `/changes undo` on the PC undoes it")
         if not state["buf"]:
             refresh(f"_running {name}…_", force=not progress)
 

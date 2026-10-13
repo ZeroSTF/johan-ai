@@ -1373,7 +1373,7 @@ def propose_edit(path, old_string, new_string, why=""):
             "lines_added": sum(1 for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++")),
             "lines_removed": sum(1 for l in diff.splitlines() if l.startswith("-") and not l.startswith("---")),
             "note": "NOT applied. Riadh reviews the diff and applies it "
-                    "himself in the Edits tab (F4).",
+                    "himself — it is shown to him in Johan's chat on the PC.",
             "diff": diff[:1200]}
 
 
@@ -1686,7 +1686,7 @@ def run_command_tool(command=None, page=None, timeout=20):
 
 import johan_sandbox as _sandbox  # noqa: E402  (after SENSITIVE is defined)
 TOOLS.append(_sandbox.TOOL)
-import johan_actions as _actions  # noqa: E402  (changes to the machine, approved in F4)
+import johan_actions as _actions  # noqa: E402  (changes to the machine, approved in the chat)
 TOOLS.append(_actions.TOOL)
 
 DISPATCH = {

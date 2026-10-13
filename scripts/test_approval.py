@@ -23,6 +23,9 @@ import johan_assistant as ja        # noqa: E402
 import johan_plan as jp             # noqa: E402
 import johan_tools as jt            # noqa: E402
 import johan_tui as tui             # noqa: E402
+# His REAL pending changes must never surface in a test (a stray enter on a
+# waiting card could approve one): no 'waiting from earlier' cards here.
+tui.JohanApp._show_backlog = lambda self, intro=True: None
 
 results = {}
 SCRATCH = Path.home() / ".cache/johan-approval-test"

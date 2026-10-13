@@ -2,7 +2,7 @@
 
 run_command is read-only by design. This is the other half: installing
 software, changing a setting, starting a service, moving a file. The model
-calls `propose_action` and NOTHING runs; the change waits in F4 (Changes)
+calls `propose_action` and NOTHING runs until he OKs it in the chat (johan_approval)
 with the exact commands, what they will do and how to undo them, and runs
 only when he presses `y`. Same shape as propose_edit.
 
@@ -707,7 +707,7 @@ def propose_action(commands=None, why="", undo_last=False, _undo_of=None):
         if res.get("ok"):
             out["note"] = ("ALREADY RUN — he always-allows this kind of change. Tell him "
                            "it's done" + (" and checked" if res.get("verified") else "")
-                           + "; `u` in F4 undoes it.")
+                           + "; `/changes undo` undoes it.")
         else:
             out["error"] = f"it ran automatically and FAILED: {res.get('error')}"
         return out
@@ -721,9 +721,9 @@ def propose_action(commands=None, why="", undo_last=False, _undo_of=None):
     return {"proposed": True, "action_id": aid,
             "steps": [s["what"] for s in steps],
             "needs_password": action["root"],
-            "note": "NOT run. Riadh reviews it in the Changes tab (F4) on the "
-                    "PC and presses y to run it" + (" — root steps open the "
-                    "system password dialog" if action["root"] else "")
+            "note": "NOT run — it waits for his OK, shown to him in Johan's chat "
+                    "on the PC" + (" (root steps open the system password dialog "
+                    "there)" if action["root"] else "")
                     + ". Tell him that; don't claim it's done."}
 
 
@@ -1037,7 +1037,7 @@ def propose_undo(aid=None):
 
 # ------------------------------------------------------------------ always-allow rules
 #
-# `Y` in F4 = run this and don't ask again for this exact kind of change.
+# "Always allow" on a change card = run this and don't ask again for this exact kind.
 # Only kinds whose worst case is a setting he flips back or a service he
 # restarts can be rules, and each rule is program + subcommand + ONE target
 # (a gsettings key, a user unit, a container, a parent folder) — never "all

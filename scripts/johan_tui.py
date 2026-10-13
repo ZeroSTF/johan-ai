@@ -138,14 +138,14 @@ PROMPT_HINT = "ask Johan anything  ·  / for commands"
 
 SLASH = ["/draw ", "/draw landscape ", "/draw square ", "/research ", "/review",
          "/refresh",
-         "/retry", "/rewind", "/copy", "/new", "/history", "/jobs", "/images", "/edits", "/rules",
+         "/retry", "/rewind", "/copy", "/new", "/history", "/jobs", "/images", "/changes", "/rules",
          "/help", "/theme", "/forget ", "/uncensored", "/normal"]
 
 # Every name the app handles itself. A commands/<name>.md file with one of
 # these names is ignored: a built-in always wins.
 BUILTIN_SLASH = {"new", "history", "sessions", "jobs", "images", "edits", "help",
                  "review", "retry", "copy", "theme", "refresh", "draw", "research",
-                 "delete", "resume", "rewind", "undo", "rules", "forget",
+                 "delete", "resume", "rewind", "undo", "rules", "forget", "changes", "edits",
                  "uncensored", "normal"}
 
 
@@ -590,8 +590,8 @@ class Welcome(Vertical):
         try:
             edits = jt.list_edits()["count"] + len(jx.list_actions())
             if edits:
-                lines.append(f"[$warning]●[/] {edits} change{'s' * (edits > 1)} waiting for you "
-                             f"[$text-muted]· F4[/]")
+                lines.append(f"[$warning]●[/] {edits} change{'s' * (edits > 1)} waiting for your OK "
+                             f"[$text-muted]· shown below[/]")
         except Exception:
             pass
         try:
@@ -726,7 +726,7 @@ HELP_MD = """\
 - `/rewind` or `ctrl+z` — take back the last turn: drops it, reverts the changes and edits it
   made (one confirmation listing exactly what, and what can't be undone), and puts your
   question back in the box to edit
-- `/review` — Johan reviews its own mistakes; proposals go to Edits (F4)
+- `/review` — Johan reviews its own mistakes; its proposals show up here for your OK
 - `/uncensored` — swap to the uncensored model for this chat (same tools); `/normal` switches back, a new chat starts normal
 - `/refresh` — fetch new job postings, drop closed ones, rebuild the queue
   (~20 min in the background; `/refresh` again shows progress; `R` in Jobs)
@@ -734,14 +734,13 @@ HELP_MD = """\
 
 ### Keys
 - `ctrl+p` — every action, searchable
-- `F2` history · `F3` jobs · `F4` changes · `F5` images
+- `F2` history · `F3` jobs · `F5` images
 - Ask for a change in chat — “install vlc”, “set super+v to copyq” — Johan asks right there:
   `1` run · `2` run and always allow that exact kind (when it can be) · last = no · or type what
   you want instead · `esc` stops. Root steps open your system's password dialog. It then
   checks the change took effect and carries on. `/rules` lists always-allowed kinds.
-- F4 Changes holds only what couldn't be asked in the chat (self-review proposals, changes
-  from your phone that need your password) plus recent changes: `y` run · `Y` run + always
-  allow · `n` discard · `u` undo the last change
+- Changes proposed while you weren't here (self-review, your phone, `johan "…"`) show up as the
+  same cards when you open Johan. `/changes` lists recent changes; `/changes undo` undoes the last
 - `esc` — stop the current answer
 - `ctrl+o` — open the newest link, PDF or image · `ctrl+y` — copy the last answer
 - `ctrl+b` — hide/show the sidebar · `ctrl+n` new chat · `ctrl+t` theme · `ctrl+q` quit
@@ -1035,116 +1034,6 @@ class ImagesPane(Vertical):
 
 # ================================================================ edits
 
-class EditsPane(Vertical):
-    """Everything waiting for his approval: file edits (red/green diff) and
-    machine changes (exact commands, what they do, how to undo). Nothing
-    runs on its own; `y` is the only trigger."""
-
-    BINDINGS = [Binding("y", "app.apply_edit", "run / apply"),
-                Binding("Y,shift+y", "app.allow_change", "run + always allow"),
-                Binding("n", "app.discard_edit", "discard"),
-                Binding("u", "app.undo_change", "undo last change")]
-
-    def compose(self) -> ComposeResult:
-        yield DataTable(id="etable", cursor_type="row", zebra_stripes=False)
-        yield VerticalScroll(Static("", id="ediff"), id="ediffbox")
-
-    def on_mount(self):
-        self.query_one("#etable", DataTable).add_columns("#", "kind", "what", "why")
-        self.query_one("#ediffbox").border_title = "details"
-        self.rows = []
-        self.load()
-
-    def load(self, focus=False):
-        table = self.query_one("#etable", DataTable)
-        keep = table.cursor_row if table.row_count else 0
-        table.clear()
-        self.rows = ([{**a, "kind": "action"} for a in jx.list_actions()]
-                     + [{**e, "kind": "edit"} for e in jt.list_edits()["edits"]])
-        if not self.rows:
-            last = jx.recent(3)
-            parts = ["[$text-muted]Nothing waiting.\n\nJohan asks about changes right in the "
-                     "chat. This tab only collects what couldn't be asked there — self-review "
-                     "proposals, changes from your phone that need your password.[/]"]
-            if last:
-                parts += ["", "[$text-muted]Recent changes (u stages an undo of the last):[/]"]
-                parts += [mk(f"[$text-muted]  {'✓' if r['ok'] else '✗'} #{r['id']} $w[/]",
-                             w=str(r.get("why") or "")[:60]) for r in reversed(last)]
-            if jx.load_rules():
-                parts += ["", f"[$text-muted]{len(jx.load_rules())} always-allow rule(s) — /rules lists them[/]"]
-            self.query_one("#ediff", Static).update(join_lines(parts))
-            return
-        for r in self.rows:
-            if r["kind"] == "action":
-                what = "; ".join(st["what"] for st in r["steps"])
-                kind = Text("root" if r["root"] else "change",
-                            style="bold red" if r["root"] else "yellow")
-                table.add_row(Text(f"a{r['id']}", style="dim"), kind, Text(what[:46]),
-                              Text((r["why"] or "—")[:40]), key=f"a{r['id']}")
-            else:
-                table.add_row(Text(f"e{r['id']}", style="dim"), Text("edit", style="cyan"),
-                              Text(r["path"][-46:]), Text((r["why"] or "—")[:40]),
-                              key=f"e{r['id']}")
-        if focus:
-            table.focus()
-        if keep and keep < len(self.rows):
-            table.move_cursor(row=keep)
-        self._show(min(keep, len(self.rows) - 1))
-
-    def selected(self):
-        table = self.query_one("#etable", DataTable)
-        if self.rows and table.cursor_row is not None and 0 <= table.cursor_row < len(self.rows):
-            return self.rows[table.cursor_row]
-        return None
-
-    def on_data_table_row_highlighted(self, event):
-        table = self.query_one("#etable", DataTable)
-        if table.cursor_row is not None:
-            self._show(table.cursor_row)
-
-    def _show(self, idx):
-        if not (0 <= idx < len(self.rows)):
-            return
-        r = self.rows[idx]
-        if r["kind"] == "action":
-            return self._show_action(r)
-        full = next((x for x in jt._load_edits() if x["id"] == r["id"]), r)
-        out = [mk("[b]$p[/b]", p=str(r["path"])), mk("[$text-muted]$w[/]", w=str(r.get("why") or "")), ""]
-        for line in (full.get("diff") or "").splitlines()[:120]:
-            if line.startswith(("+++", "---")):
-                style = "$text-muted"
-            elif line.startswith("@@"):
-                style = "$accent"
-            elif line.startswith("+"):
-                style = "$success"
-            elif line.startswith("-"):
-                style = "$error"
-            else:
-                style = "$text-muted"
-            out.append(mk(f"[{style}]$l[/]", l=line))
-        out += ["", "[$text-muted]y apply · n discard[/]"]
-        self.query_one("#ediff", Static).update(join_lines(out))
-
-    def _show_action(self, a):
-        out = [f"[b]Change a{a['id']}[/b]", mk("[$text-muted]$w[/]", w=str(a.get("why") or "no reason given")), ""]
-        for i, st in enumerate(a["steps"], 1):
-            tag = "[$error]ROOT[/] " if st["root"] else ""
-            out.append(mk(f"{i}. {tag}$w", w=str(st["what"])))
-            out.append(mk("   [$accent]$c[/]", c="$ " + str(st["shown"])))
-            if st.get("undo"):
-                out.append(mk("   [$text-muted]undo: $u[/]", u=" ".join(map(str, st["undo"]))))
-            elif st.get("undo_note"):
-                out.append(mk("   [$text-muted]undo: $u[/]", u=str(st["undo_note"])))
-            else:
-                out.append("   [$warning]no automatic undo[/]")
-        out.append("")
-        if a["root"]:
-            out.append("[$warning]Root steps open your system's password dialog — "
-                       "Johan never sees the password.[/]")
-        out.append("[$text-muted]y run · Y run + always allow this kind · n discard[/]")
-        self.query_one("#ediff", Static).update(join_lines(out))
-
-
 # ================================================================ command palette
 
 class JohanCommands(Provider):
@@ -1156,8 +1045,8 @@ class JohanCommands(Provider):
         ("Chat history", "history", "browse, reopen or delete past chats"),
         ("Jobs", "jobs_tab", "the apply queue"),
         ("Images", "images_tab", "everything Johan has drawn"),
-        ("Changes", "edits_tab", "changes that couldn't be asked in the chat, and recent ones"),
-        ("Undo last change", "undo_change", "stages the undo of the last applied change"),
+        ("Recent changes", "changes", "what Johan changed lately; /changes undo undoes the last"),
+        ("Undo last change", "undo_last_change", "asks to undo the last change Johan made"),
         ("Uncensored mode", "uncensored", "swap to the uncensored model for this chat"),
         ("Normal mode", "normal_model", "back to the normal model"),
         ("Always-allow rules", "list_rules", "changes that run without asking; /rules forget N"),
@@ -1343,7 +1232,6 @@ class JohanApp(App):
         Binding("f1", "help_me", "help"),
         Binding("f2", "history", "history"),
         Binding("f3", "jobs_tab", "jobs", show=False),
-        Binding("f4", "edits_tab", "changes", show=False),
         Binding("f5", "images_tab", "images", show=False),
         Binding("escape", "interrupt", "stop", show=False),
         Binding("ctrl+n", "new_chat", "new chat"),
@@ -1379,6 +1267,7 @@ class JohanApp(App):
         self.turn_tools = {}     # turn id → [(tool, args)] it called
         self.pending = None        # Choices or PlanCard waiting for his pick
         self.approval = None       # (ApprovalCard, Event, box) while a turn waits for his OK
+        self.backlog_card = None   # an ApprovalCard for a change waiting from earlier
         self.plan_card = None      # the approved plan whose checklist is ticking
         self._asked = None
 
@@ -1389,8 +1278,6 @@ class JohanApp(App):
                     yield ChatPane(id="chat")
                 with TabPane("Jobs [$text-disabled]F3[/]", id="tab-jobs"):
                     yield JobsPane(id="jobs")
-                with TabPane("Changes [$text-disabled]F4[/]", id="tab-edits"):
-                    yield EditsPane(id="edits")
                 with TabPane("Images [$text-disabled]F5[/]", id="tab-images"):
                     yield ImagesPane(id="images")
             yield Sidebar()
@@ -1436,6 +1323,7 @@ class JohanApp(App):
         self._refresh_sidebar()
         self.query_one("#prompt").focus()
         self.warm_up()
+        self.set_timer(0.5, self._show_backlog)    # changes waiting from earlier
 
     def _fresh(self):
         self.messages = [{"role": "system", "content": ja.prime_with_memories(ja.SYSTEM_PROMPT)}]
@@ -1628,7 +1516,7 @@ class JohanApp(App):
     def on_tabbed_content_tab_activated(self, event):
         """Clicking a tab focuses its table, so its keys work immediately."""
         pid = event.pane.id if event.pane else ""
-        target = {"tab-jobs": "#jtable", "tab-edits": "#etable", "tab-images": "#itable"}.get(pid)
+        target = {"tab-jobs": "#jtable", "tab-images": "#itable"}.get(pid)
         if target:
             try:
                 self.query_one(target).focus()
@@ -1648,6 +1536,13 @@ class JohanApp(App):
                 return self._resolve_approval({"choice": "no", "reason": text},
                                               f"no — {text}", ok=False)
             return self.approval[0].choices.action_pick()
+        if self.backlog_card is not None:
+            if not text:
+                return self.backlog_card.choices.action_pick()
+            # Typing means he wants to talk, not decide now: the change stays
+            # waiting and comes back the next time Johan opens.
+            card, self.backlog_card = self.backlog_card, None
+            card.decided("left waiting — it'll be here next time", ok=False)
         if text:
             self._submit(text)
         elif self.pending is not None and not self.busy:
@@ -1674,7 +1569,7 @@ class JohanApp(App):
         handlers = {
             "/new": self.action_new_chat, "/history": self.action_history,
             "/sessions": self.action_history, "/jobs": self.action_jobs_tab,
-            "/images": self.action_images_tab, "/edits": self.action_edits_tab,
+            "/images": self.action_images_tab,
             "/help": self.action_help_me, "/review": self.action_review,
             "/retry": self.action_retry, "/copy": self.action_copy_last,
             "/theme": self.action_cycle_theme, "/refresh": self.action_refresh_jobs,
@@ -1701,6 +1596,8 @@ class JohanApp(App):
                               "err" if res.get("error") else "ok")
         if cmd == "/resume":
             return self._load_session(arg)
+        if cmd in ("/changes", "/edits"):
+            return self.action_changes(arg)
         if cmd == "/rules":
             if arg.split(" ")[0] in ("forget", "rm", "remove", "delete"):
                 res = jx.remove_rule(arg.split(" ")[-1])
@@ -1795,6 +1692,86 @@ class JohanApp(App):
             self.busy_label = "running the change"
         self.query_one("#prompt").focus()
 
+    # ---- changes waiting from earlier, and /changes ------------------------
+
+    def _show_backlog(self, intro=True):
+        """Changes proposed while nobody could answer — self-review, the
+        phone, one-shot `johan "…"` — shown as the same cards, one at a time.
+        (This replaced the F4 tab: every approval happens in the chat.)"""
+        if self.busy or self.backlog_card is not None or self.approval is not None:
+            return
+        items = ([("action", {**a, "can_always": jx.can_always(a["steps"])})
+                  for a in jx.list_actions()]
+                 + [("edit", e) for e in jt._load_edits()])
+        if not items:
+            return
+        if intro:
+            n = len(items)
+            self._note(f"{n} change{'s' * (n > 1)} waiting from earlier — "
+                       f"pick for {'each' if n > 1 else 'it'}, or just keep chatting", "note")
+        kind, item = items[0]
+        card = self._chat().add(ApprovalCard(kind, item, earlier=True))
+        self.backlog_card = card
+        # After the current event settles: shown from a slash command, the
+        # prompt took focus back right after, and "1" was typed as text.
+        self.call_after_refresh(card.choices.focus)
+        self._chat().scroll_end(animate=False)
+
+    @work(thread=True, exclusive=True, group="backlog")
+    def backlog_worker(self, card, choice):
+        item = card.item
+        ok = True
+        try:
+            if choice == "no":
+                (jx.discard_action if card.kind == "action" else jt.discard_edit)(item["id"])
+                text, ok = "declined — nothing ran", False
+            elif card.kind == "edit":
+                res = jt.apply_edit(item["id"])
+                text = res.get("error") or f"applied to {res.get('path')} (backup kept)"
+                ok = not res.get("error")
+            else:
+                res = jx.allow_and_run(item["id"]) if choice == "always" else jx.run_action(item["id"])
+                text = res.get("error") or jx.describe_result(res)
+                if res.get("rules_added"):
+                    text += " · always allowed from now on"
+                ok = not res.get("error")
+        except Exception as e:
+            text, ok = f"failed: {type(e).__name__}: {e}", False
+        self.call_from_thread(card.decided, text, ok)
+        self.call_from_thread(self._backlog_next)
+
+    def _backlog_next(self):
+        self.backlog_card = None
+        self._refresh_sidebar()
+        self._show_backlog(intro=False)
+        if self.backlog_card is None:
+            self.query_one("#prompt").focus()
+
+    def action_changes(self, arg=""):
+        """/changes — what Johan changed lately; /changes undo — undo the last."""
+        self.query_one("#main", TabbedContent).active = "tab-chat"
+        self._drop_welcome()
+        if arg.strip().lower() == "undo":
+            return self.action_undo_last_change()
+        recent = jx.recent(8)
+        if not recent:
+            return self._note("no changes yet", "note")
+        lines = ["recent changes (newest last):"]
+        for r in recent:
+            mark = "✓" if r.get("ok") else "✗"
+            undone = " · undone" if r.get("undone") else ""
+            lines.append(f"  {mark} #{r['id']} {(r.get('why') or 'change')[:60]}{undone}")
+        lines.append("/changes undo — undo the last one · ctrl+z rewinds a whole turn")
+        self._note("\n".join(lines), "ok")
+
+    def action_undo_last_change(self):
+        if self.busy:
+            return self._toast("still working — esc first")
+        res = jx.propose_undo()
+        if res.get("error"):
+            return self._note(res["error"], "err")
+        self._show_backlog(intro=False)            # the undo is a change like any other: asked here
+
     def _retire_pending(self):
         p, self.pending = self.pending, None
         if isinstance(p, PlanCard):
@@ -1824,6 +1801,11 @@ class JohanApp(App):
         ch.focus()
 
     def on_choices_picked(self, event: Choices.Picked):
+        if self.backlog_card is not None and event.choices is self.backlog_card.choices:
+            label = self.backlog_card.options[event.index]
+            choice = ("no" if label == "No" else
+                      "always" if label.startswith("Yes, and always") else "yes")
+            return self.backlog_worker(self.backlog_card, choice)
         if self.approval is not None and event.choices is self.approval[0].choices:
             card = self.approval[0]
             label = card.options[event.index]
@@ -1936,11 +1918,11 @@ class JohanApp(App):
         self._stop_busy()
         self._chat().scroll_end(animate=False)
         self._refresh_sidebar()
-        for pane in (JobsPane, EditsPane):
-            try:
-                self.query_one(pane).load()        # never focus: see JobsPane.load
-            except Exception:
-                pass
+        try:
+            self.query_one(JobsPane).load()        # never focus: see JobsPane.load
+        except Exception:
+            pass
+        self._show_backlog()                       # e.g. changes staged from the phone
         try:
             (focus or self.query_one("#prompt")).focus()
         except Exception:
@@ -2026,8 +2008,6 @@ class JohanApp(App):
     def action_jobs_tab(self):
         self._goto("tab-jobs", JobsPane)
 
-    def action_edits_tab(self):
-        self._goto("tab-edits", EditsPane)
 
     def action_images_tab(self):
         self._goto("tab-images", ImagesPane)
@@ -2165,10 +2145,6 @@ class JohanApp(App):
         box = self.query_one("#prompt")
         box.value, box.cursor_position = text, len(text)
         box.focus()
-        try:
-            self.query_one(EditsPane).load()
-        except Exception:
-            pass
         self._refresh_sidebar()
         try:
             ja.save_session(self.messages)
@@ -2209,8 +2185,9 @@ class JohanApp(App):
 
     def action_refresh(self):
         self._refresh_sidebar()
-        for pane in (JobsPane, EditsPane, ImagesPane):
+        for pane in (JobsPane, ImagesPane):
             self.query_one(pane).load()
+        self._show_backlog()
         for w in self.query(Welcome):
             w.refresh_state()
         self._toast("refreshed")
@@ -2249,7 +2226,7 @@ class JohanApp(App):
             return
         self._drop_welcome()
         self._note("self-review: reading the last week of failures and staging the "
-                   "best fixes for you to approve (F4) — about a minute")
+                   "best fixes for you to approve — about a minute")
         self._start_busy("reviewing my mistakes")
         self.review_worker()
 
@@ -2262,7 +2239,7 @@ class JohanApp(App):
             jr.write_report(result, jr._low_confidence(7), staged, 7)
             fixed = sum(1 for c in result["clusters"].values() if c["fixed"])
             msg = (f"{len(result['clusters'])} kinds of failure ({fixed} already fixed) · "
-                   f"{len(staged)} proposal{'s' * (len(staged) != 1)} — F4 to review")
+                   f"{len(staged)} proposal{'s' * (len(staged) != 1)} — shown below for your OK")
             self.call_from_thread(self._note, f"self-review: {msg}", "ok")
             self.call_from_thread(self._toast, msg, "self-review done")
         except Exception as e:
@@ -2272,84 +2249,14 @@ class JohanApp(App):
 
     # --- edits ----------------------------------------------------------
 
-    def action_apply_edit(self):
-        e = self.query_one(EditsPane).selected()
-        if not e:
-            return
-        if e["kind"] == "action":
-            if getattr(self, "_running_change", False):
-                return self._toast("a change is already running", "wait")
-            self._running_change = True
-            self._toast("running…" + (" — enter your password in the system dialog"
-                                      if e["root"] else ""), f"change a{e['id']}")
-            return self.change_worker(e["id"])
-        res = jt.apply_edit(e["id"])
-        self.query_one(EditsPane).load(focus=True)
-        if res.get("error"):
-            self._toast(res["error"], "edit not applied", error=True)
-        else:
-            self._toast(f"applied to {res['path']} (backup kept)", "edit applied")
-
-    @work(thread=True)
-    def change_worker(self, aid, allow=False):
-        try:
-            res = jx.allow_and_run(aid) if allow else jx.run_action(aid)
-        except Exception as e:
-            res = {"error": f"{type(e).__name__}: {e}"}
-        finally:
-            self._running_change = False
-        self.call_from_thread(self.query_one(EditsPane).load, True)
-        self.call_from_thread(self._refresh_sidebar)
-        if res.get("error"):
-            self.call_from_thread(self._toast, res["error"][:300], f"change a{aid} failed", True)
-        else:
-            self.call_from_thread(self._toast,
-                                  jx.describe_result(res)
-                                  + (" · u to undo" if res.get("undo") else "")
-                                  + "".join(f" · always allowed now: {t}"
-                                            for t in res.get("rules_added") or []),
-                                  f"change a{aid} applied")
-
-    def action_allow_change(self):
-        e = self.query_one(EditsPane).selected()
-        if not e or e["kind"] != "action":
-            return self._toast("Y always-allows machine changes, not file edits")
-        if getattr(self, "_running_change", False):
-            return self._toast("a change is already running", "wait")
-        self._running_change = True
-        self._toast("running, and allowing this kind from now on…", f"change a{e['id']}")
-        self.change_worker(e["id"], True)
-
     def action_list_rules(self):
         self.query_one("#main", TabbedContent).active = "tab-chat"
         rules = jx.load_rules()
         if not rules:
-            return self._note("no always-allow rules — Y on a change in F4 adds one", "ok")
+            return self._note("no always-allow rules — pick “always allow” on a change card to add one", "ok")
         self._note("always allowed (run without asking):\n"
                    + "\n".join(f"  {i}. {jx.rule_text(r)}" for i, r in enumerate(rules, 1))
                    + "\n/rules forget N removes one", "ok")
-
-    def action_discard_edit(self):
-        e = self.query_one(EditsPane).selected()
-        if not e:
-            return
-        if e["kind"] == "action":
-            jx.discard_action(e["id"])
-        else:
-            jt.discard_edit(e["id"])
-        self.query_one(EditsPane).load(focus=True)
-        self._toast(f"discarded {e['kind']} {e['id']}")
-
-    def action_undo_change(self):
-        res = jx.propose_undo()
-        self._goto("tab-edits", EditsPane)
-        self.query_one(EditsPane).load(focus=True)
-        if res.get("error"):
-            self._toast(res["error"], "nothing to undo", error=True)
-        else:
-            self._toast(f"undo staged as a{res['action_id']} — y to run it", "undo")
-
-    # --- jobs -----------------------------------------------------------
 
     def action_open_posting(self):
         job = self.query_one(JobsPane).selected()

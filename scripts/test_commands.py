@@ -124,6 +124,9 @@ def stub_world(tmp):
 async def pilot(tmp):
     ja = stub_world(tmp)
     import johan_tui as tui
+    # His REAL pending changes must never surface in a test (a stray enter on
+    # a waiting card could approve one): no 'waiting from earlier' cards here.
+    tui.JohanApp._show_backlog = lambda self, intro=True: None
     from textual.widgets import Input
     tui._searx_ok = lambda: False
     sent = []

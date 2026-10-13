@@ -274,7 +274,7 @@ PLAN_PROMPT = (
     f"{INTERNAL} Before doing anything, plan my request as 2-6 short steps in "
     "order. Each step: one action under 12 words, and the tool it uses (none "
     "if no tool). Look before changing anything. A step that changes my "
-    "machine IS the change, staged with propose_action (I approve it in F4). "
+    "machine IS the change, made with propose_action (I approve each one). "
     "No steps for waiting, planning or approving. Don't do anything yet.")
 
 REPLAN_PROMPT = (
@@ -284,7 +284,7 @@ REPLAN_PROMPT = (
 GO_PROMPT = (
     f"{INTERNAL} Plan approved. Do it now, step by step, in that order — stage "
     "each change with propose_action — then tell me briefly what was done and "
-    "what is waiting for my approval in F4.")
+    "what is still waiting for my OK.")
 
 CANCEL_PROMPT = f"{INTERNAL} I cancelled that plan. Don't do any of it."
 CANCELLED = "Cancelled — nothing ran."
