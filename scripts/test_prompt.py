@@ -97,6 +97,19 @@ async def main():
             box.value = "/draw "
             check("setting value puts the cursor at the end",
                   box.cursor_position == len("/draw "))
+
+            # Typing your own answer while options are shown: Choices hands the
+            # letter to the prompt. That called an Input-only method and
+            # crashed the app once the prompt became multi-line.
+            from johan_widgets import Choices
+            box.value = ""
+            ch = Choices(["one", "two"])
+            await app._chat().mount(ch)
+            ch.focus()
+            await pilot.pause()
+            await pilot.press("h", "i")
+            await pilot.pause()
+            check("typing over options goes to the prompt (no crash)", box.value == "hi")
     finally:
         for (obj, name), val in saved.items():
             setattr(obj, name, val)

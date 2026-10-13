@@ -1350,6 +1350,25 @@ def propose_edit(path, old_string, new_string, why=""):
         "diff": diff, "turn": _actions.TURN,     # so rewind can find it
     })
     _save_edits(edits)
+    # Ask him inline when someone can answer (see johan_approval): the turn
+    # waits, and the model learns whether the edit was applied.
+    import johan_approval as jap
+    decision = jap.ask("edit", edits[-1])
+    if decision is not None:
+        if decision["choice"] == "no":
+            discard_edit(edit_id)
+            out = {"declined": True, "edit_id": edit_id, "path": display,
+                   "note": "He said NO — the file is unchanged. Don't propose the "
+                           "same edit again; follow what he said instead."}
+            if decision["reason"]:
+                out["he_said"] = decision["reason"]
+            return out
+        res = apply_edit(edit_id)
+        if res.get("error"):
+            return {"applied": False, "edit_id": edit_id, "path": display,
+                    "error": f"he approved it but applying FAILED: {res['error']}"}
+        return {"applied": True, "edit_id": edit_id, "path": display,
+                "note": "He approved it and it is written (backup kept). Report that."}
     return {"proposed": True, "edit_id": edit_id, "path": display,
             "lines_added": sum(1 for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++")),
             "lines_removed": sum(1 for l in diff.splitlines() if l.startswith("-") and not l.startswith("---")),
@@ -1606,9 +1625,9 @@ TOOLS = [
                         "ps, docker, git log, nvidia-smi…). Pipes and && work. Long output "
                         "is paged: `page`=N reads page N of the last output.",
         {"command": {"type": "string"}, "page": {"type": "integer"}}),
-    _fn("propose_edit", "Stage an edit to a file in ~/johan or a git repo under /home/zeros; "
-                         "he approves it. `old_string` must match exactly once, indentation "
-                         "included — read the file first.",
+    _fn("propose_edit", "Edit a file in ~/johan or a git repo under /home/zeros. He is asked "
+                         "to approve it; the result comes back to you. `old_string` must match "
+                         "exactly once, indentation included — read the file first.",
         {"path": {"type": "string"}, "old_string": {"type": "string"},
          "new_string": {"type": "string"}, "why": {"type": "string"}},
         ["path", "old_string", "new_string"]),

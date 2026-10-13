@@ -30,7 +30,7 @@ back earlier questions. **esc** stops an answer immediately.
 | — | **Chat** | talking to Johan |
 | **F2** | **History** | browse, reopen or delete past chats (`d` twice deletes) |
 | **F3** | **Jobs** | the apply queue |
-| **F4** | **Changes** | everything waiting for my OK: changes to the PC and code edits |
+| **F4** | **Changes** | anything that couldn't be approved in the chat, and recent changes |
 | **F5** | **Images** | everything Johan has drawn |
 | **F1** | Help | all of this, inside the app |
 
@@ -101,25 +101,31 @@ and secrets like `~/.ssh` and `.env` files refused.
 ### Change things on the PC, only when I say yes
 
 "Install htop", "make super+v open the clipboard history", "restart the
-embed service", "move these files into a folder": Johan **proposes** the
-exact commands and nothing runs. The change waits in **F4 Changes**, showing
-what each step does, the command, whether it needs root, and how it will be
-undone.
+embed service", "move these files into a folder": when Johan wants to change
+something, it **asks right in the chat** and waits. The card shows what each
+step does, the exact command, whether it needs root, and how it will be undone.
 
-- **y** runs it, **n** throws it away, **u** sets up an undo of the last change.
-- **Y** runs it *and* always allows that exact kind of change from now on
-  (only low-risk kinds: one setting, one user service, one container).
+- **1** runs it, **2** runs it *and* always allows that exact kind of change
+  from now on (only low-risk kinds: one setting, one user service, one
+  container), the last option says no. Or just **type** what you want instead.
+  **esc** stops everything. There are no letter shortcuts on purpose, so typing
+  "yes, but…" can't approve anything by accident.
+- Once it runs, Johan checks it actually took effect and **carries on with the
+  real result**, so a multi-step job can react to each step.
 - Root steps open the system's own password dialog. Johan never sees the
   password.
 - Before running, every step is checked against the real system (does that
-  package exist, is that setting real, is that theme installed), and after
-  running, each change is **verified** to have actually taken effect.
+  package exist, is that setting real, is that theme installed).
 - Files are never deleted, only moved to the Trash.
 - The desktop, drivers, kernel, my keys and Johan's own data are off limits
   even with approval.
+- **ctrl+z** rewinds a turn and undoes what it changed.
 
-Code edits work the same way: Johan proposes a diff in F4 and nothing is
-written until I press **y**.
+Code edits work the same way: the card shows the diff.
+
+**F4 Changes** only holds what couldn't be asked in the chat (Johan's
+self-review proposals, or a root change proposed from the phone) plus recent
+changes, with **u** to undo the last one.
 
 ### Big requests: plan first
 
@@ -198,8 +204,9 @@ The same assistant from my phone (only my account can use it):
 | `/uncensored`, `/normal` | swap models, same as in the app |
 | `/status`, `/refresh`, `/new`, `/help` | |
 
-Options come as buttons. Changes to the PC can be *proposed* from the phone
-but only approved at the computer (except always-allowed ones).
+Options come as buttons, and so do changes: **Run it / Always allow / No**,
+after which Johan carries on with the result. Changes that need the root
+password can only be approved at the PC.
 
 ---
 

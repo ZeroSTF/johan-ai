@@ -89,7 +89,8 @@ import johan_commands as jc       # noqa: E402
 import apply_queue as aq          # noqa: E402
 import johan_plan as jp           # noqa: E402
 import johan_interrupt as ji      # noqa: E402
-from johan_widgets import Choices, PlanCard  # noqa: E402
+from johan_widgets import ApprovalCard, Choices, PlanCard  # noqa: E402
+import johan_approval as jap  # noqa: E402
 import johan_widgets as jw  # noqa: E402
 
 try:                               # real pictures in WezTerm/kitty/sixel terminals
@@ -183,6 +184,7 @@ class SlashSuggester(SuggestFromList):
 # What each tool is DOING, in words — "searching the web" reads better than
 # web_search(query=…), and the raw call is still one click away.
 VERBS = {
+    "propose_action": "asking to change something", "propose_edit": "asking to edit a file",
     "web_search": "searching the web", "fetch_page": "reading a page",
     "wikipedia": "checking Wikipedia", "latest_version": "checking versions",
     "run_command": "running a command",
@@ -733,11 +735,13 @@ HELP_MD = """\
 ### Keys
 - `ctrl+p` — every action, searchable
 - `F2` history · `F3` jobs · `F4` changes · `F5` images
-- In Changes: `y` run/apply · `n` discard · `u` undo the last change (staged, you approve it)
-- `Y` (shift+y) on a change — run it and always allow that exact kind (one setting, one user
-  service, one container, folders in one place); never root, installs or file moves. `/rules` lists them
-- Ask for a change in chat — “install vlc”, “set super+v to copyq” — Johan stages it in F4;
-  root steps open your system's password dialog. Nothing runs until you press `y`.
+- Ask for a change in chat — “install vlc”, “set super+v to copyq” — Johan asks right there:
+  `1` run · `2` run and always allow that exact kind (when it can be) · last = no · or type what
+  you want instead · `esc` stops. Root steps open your system's password dialog. It then
+  checks the change took effect and carries on. `/rules` lists always-allowed kinds.
+- F4 Changes holds only what couldn't be asked in the chat (self-review proposals, changes
+  from your phone that need your password) plus recent changes: `y` run · `Y` run + always
+  allow · `n` discard · `u` undo the last change
 - `esc` — stop the current answer
 - `ctrl+o` — open the newest link, PDF or image · `ctrl+y` — copy the last answer
 - `ctrl+b` — hide/show the sidebar · `ctrl+n` new chat · `ctrl+t` theme · `ctrl+q` quit
@@ -1059,9 +1063,9 @@ class EditsPane(Vertical):
                      + [{**e, "kind": "edit"} for e in jt.list_edits()["edits"]])
         if not self.rows:
             last = jx.recent(3)
-            parts = ["[$text-muted]Nothing waiting.\n\nAsk Johan for a change — “install vlc”, "
-                     "“make super+v open copyq”, “in scripts/x.py change A to B” — it lands "
-                     "here and runs only when you press [b]y[/b].[/]"]
+            parts = ["[$text-muted]Nothing waiting.\n\nJohan asks about changes right in the "
+                     "chat. This tab only collects what couldn't be asked there — self-review "
+                     "proposals, changes from your phone that need your password.[/]"]
             if last:
                 parts += ["", "[$text-muted]Recent changes (u stages an undo of the last):[/]"]
                 parts += [mk(f"[$text-muted]  {'✓' if r['ok'] else '✗'} #{r['id']} $w[/]",
@@ -1152,7 +1156,7 @@ class JohanCommands(Provider):
         ("Chat history", "history", "browse, reopen or delete past chats"),
         ("Jobs", "jobs_tab", "the apply queue"),
         ("Images", "images_tab", "everything Johan has drawn"),
-        ("Changes", "edits_tab", "edits and machine changes waiting for approval"),
+        ("Changes", "edits_tab", "changes that couldn't be asked in the chat, and recent ones"),
         ("Undo last change", "undo_change", "stages the undo of the last applied change"),
         ("Uncensored mode", "uncensored", "swap to the uncensored model for this chat"),
         ("Normal mode", "normal_model", "back to the normal model"),
@@ -1374,6 +1378,7 @@ class JohanApp(App):
         self.turn_ids = {}       # index of the user message → jx turn id (for rewind)
         self.turn_tools = {}     # turn id → [(tool, args)] it called
         self.pending = None        # Choices or PlanCard waiting for his pick
+        self.approval = None       # (ApprovalCard, Event, box) while a turn waits for his OK
         self.plan_card = None      # the approved plan whose checklist is ticking
         self._asked = None
 
@@ -1635,6 +1640,14 @@ class JohanApp(App):
             return
         text = event.value.strip()
         event.input.value = ""
+        if self.approval is not None:
+            # A change is waiting for his OK: typing says no + what instead,
+            # an empty enter picks the highlighted option.
+            if text:
+                self._chat().add(UserMsg(text))
+                return self._resolve_approval({"choice": "no", "reason": text},
+                                              f"no — {text}", ok=False)
+            return self.approval[0].choices.action_pick()
         if text:
             self._submit(text)
         elif self.pending is not None and not self.busy:
@@ -1740,6 +1753,48 @@ class JohanApp(App):
 
     # ---- ask-with-options and plan-first (johan_plan.py, johan_widgets.py)
 
+    # ---- inline approval (johan_approval.py) ------------------------------
+
+    def _approve(self, kind, item):
+        """Called from the turn's tool thread: show the card, wait for him.
+        esc (the turn's cancel) counts as no, so nothing runs."""
+        ev, box = threading.Event(), {}
+        self.call_from_thread(self._show_approval, kind, item, ev, box)
+        while not ev.wait(0.1):
+            if self.cancel.is_set():
+                self.call_from_thread(self._resolve_approval,
+                                      {"choice": "no", "reason": "he pressed esc"},
+                                      "stopped — nothing ran", False)
+                ev.wait(2)
+                break
+        return box.get("decision") or {"choice": "no", "reason": "no answer"}
+
+    def _show_approval(self, kind, item, ev, box):
+        card = ApprovalCard(kind, item)
+        turn = self.turn
+        if turn is not None and turn.is_mounted:
+            # Inside the turn, between its steps and its answer — added at
+            # the bottom of the chat it ended up BELOW the final answer.
+            turn.mount(card, before=turn.body)
+        else:
+            self._chat().add(card)
+        self.approval = (card, ev, box)
+        self.busy_label = "waiting for your OK"
+        card.choices.focus()
+        self._chat().scroll_end(animate=False)
+
+    def _resolve_approval(self, decision, text, ok=True):
+        if self.approval is None:
+            return
+        card, ev, box = self.approval
+        self.approval = None
+        card.decided(text, ok)
+        box["decision"] = decision
+        ev.set()
+        if decision["choice"] != "no":
+            self.busy_label = "running the change"
+        self.query_one("#prompt").focus()
+
     def _retire_pending(self):
         p, self.pending = self.pending, None
         if isinstance(p, PlanCard):
@@ -1769,6 +1824,14 @@ class JohanApp(App):
         ch.focus()
 
     def on_choices_picked(self, event: Choices.Picked):
+        if self.approval is not None and event.choices is self.approval[0].choices:
+            card = self.approval[0]
+            label = card.options[event.index]
+            choice = ("no" if label == "No" else
+                      "always" if label.startswith("Yes, and always") else "yes")
+            return self._resolve_approval({"choice": choice, "reason": ""},
+                                          {"yes": "approved", "always": "approved · always allowed from now on",
+                                           "no": "declined"}[choice], ok=choice != "no")
         owner = self.pending
         if self.busy or owner is None:
             return
@@ -1792,6 +1855,8 @@ class JohanApp(App):
         # Everything this worker thread waits on — the plan check, model
         # calls, tools — now gives way to esc within ~0.1 s.
         ji.set_stop(self.cancel.is_set)
+        # Changes Johan wants to make are asked about inline; the turn waits.
+        jap.set_approver(self._approve)
         turn = self.turn
         self._asked = None
         q = ja._last_user_message(self.messages)

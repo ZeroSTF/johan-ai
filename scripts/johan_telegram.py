@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import johan_assistant as ja      # noqa: E402
 import johan_tools as jt          # noqa: E402
 import apply_queue as aq          # noqa: E402
+import johan_actions as jx       # noqa: E402
 import johan_commands as jc       # noqa: E402
 import johan_plan as jp           # noqa: E402
 
@@ -577,6 +578,51 @@ def _drop_buttons(bot, chat, pend):
 
 
 PLAN_LABELS = ["✅ Go ahead", "✖ Cancel"]
+RUN, ALWAYS, NO, APPLY = "✅ Run it", "♾ Always allow", "✖ No", "✅ Apply it"
+
+
+def offer_approval(bot, chat, tool, result, more=0):
+    """Buttons for a change Johan proposed this turn."""
+    if tool == "propose_edit":
+        text = f"*Edit waiting:* `{result.get('path')}`\n```\n{(result.get('diff') or '')[:700]}\n```"
+        labels = [APPLY, NO]
+        item = {"kind": "edit", "id": result["edit_id"]}
+    else:
+        action = next((a for a in jx.list_actions() if a["id"] == result["action_id"]), None)
+        if action is None:
+            return
+        steps = "\n".join(f"• {s['what']}\n  `{s['shown']}`" for s in action["steps"])
+        if action["root"]:
+            text = (f"*Change waiting:*\n{steps}\n\n_This needs your password, which only "
+                    f"works on the PC — approve it in F4 there._")
+            labels = [NO]
+        else:
+            text = f"*Change waiting:*\n{steps}"
+            labels = [RUN] + ([ALWAYS] if jx.can_always(action["steps"]) else []) + [NO]
+        item = {"kind": "action", "id": action["id"]}
+    if more:
+        text += f"\n\n_{more} more waiting in F4 on the PC._"
+    pid = _new_pending(bot, chat, "approve", labels, text, None, item=item)
+    bot.pending[chat]["message_id"] = bot.send(chat, text, reply_markup=keyboard(pid, labels))
+
+
+def resolve_approval(bot, chat, pend, choice):
+    """Run (or drop) the change, show the outcome, and let Johan carry on."""
+    item = pend["item"]
+    if choice == NO:
+        (jx.discard_action if item["kind"] == "action" else jt.discard_edit)(item["id"])
+        bot.history(chat).append({"role": "user", "content": "[he said no to that change — nothing ran]"})
+        return bot.send(chat, "Nothing ran.")
+    if item["kind"] == "edit":
+        res = jt.apply_edit(item["id"])
+        outcome = res.get("error") or f"applied to {res.get('path')} (backup kept)"
+    else:
+        res = jx.allow_and_run(item["id"]) if choice == ALWAYS else jx.run_action(item["id"])
+        outcome = res.get("error") or jx.describe_result(res)
+    bot.send(chat, ("⚠️ " if res.get("error") else "✅ ") + outcome)
+    bot.history(chat).append({"role": "user", "content": f"[he approved that change: {outcome}]"})
+    if ollama_up():
+        run_chat_turn(bot, chat)
 
 
 def propose_plan(bot, chat, changes=None):
@@ -617,6 +663,8 @@ def handle_callback(bot, cq):
     bot.edit(chat, pend["message_id"], f"{pend['text']}\n\n→ _{choice}_")
     if pend["kind"] == "ask":
         handle_chat(bot, chat, choice)          # the pick is his next message
+    elif pend["kind"] == "approve":
+        resolve_approval(bot, chat, pend, choice)
     elif i == 0:
         if not ollama_up():
             bot.pending[chat] = pend
@@ -639,7 +687,7 @@ def run_chat_turn(bot, chat, progress=None):
 
     head = (lambda: progress.text() + "\n\n") if progress else (lambda: "")
     placeholder = bot.send(chat, head() + "…")
-    state = {"buf": "", "last": 0.0, "tools": [], "asked": None}
+    state = {"buf": "", "last": 0.0, "tools": [], "asked": None, "proposals": []}
 
     def refresh(tail, force=False):
         now = time.monotonic()
@@ -658,6 +706,9 @@ def run_chat_turn(bot, chat, progress=None):
             progress.on_tool(name, jp.failed_result(result))
         if name == "ask" and isinstance(result, dict) and result.get("asked"):
             state["asked"] = result
+        if name in ("propose_action", "propose_edit") and isinstance(result, dict) \
+                and result.get("proposed"):
+            state["proposals"].append((name, result))
         if name == "generate_image" and isinstance(result, dict) and result.get("path"):
             bot.send_photo(chat, result["path"],
                            caption=f"{result.get('prompt', '')[:200]} · seed {result.get('seed')}")
@@ -701,6 +752,12 @@ def run_chat_turn(bot, chat, progress=None):
     else:
         bot.edit(chat, placeholder, "…")
         bot.send(chat, final)
+
+    # A change Johan proposed waits for a button. (The polling loop can't
+    # pause mid-turn like the PC can, so the turn ends here and the result of
+    # his tap goes back to Johan as the next turn.)
+    if state["proposals"]:
+        offer_approval(bot, chat, *state["proposals"][0], more=len(state["proposals"]) - 1)
 
     # If the answer names CVs, offer them as real files — the whole point of
     # having this on a phone is being able to apply from it.

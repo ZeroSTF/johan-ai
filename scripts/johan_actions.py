@@ -711,6 +711,13 @@ def propose_action(commands=None, why="", undo_last=False, _undo_of=None):
         else:
             out["error"] = f"it ran automatically and FAILED: {res.get('error')}"
         return out
+    # Ask him right here, in the conversation, if anyone can answer: the turn
+    # waits, and the model gets the real outcome instead of "staged".
+    import johan_approval as jap
+    decision = None if _undo_of is not None else jap.ask(
+        "action", {**action, "can_always": can_always(steps)})
+    if decision is not None:
+        return _decided(aid, steps, decision)
     return {"proposed": True, "action_id": aid,
             "steps": [s["what"] for s in steps],
             "needs_password": action["root"],
@@ -718,6 +725,40 @@ def propose_action(commands=None, why="", undo_last=False, _undo_of=None):
                     "PC and presses y to run it" + (" — root steps open the "
                     "system password dialog" if action["root"] else "")
                     + ". Tell him that; don't claim it's done."}
+
+
+def can_always(steps):
+    """Could every step become an always-allow rule? (Only then is
+    "always" offered — offering it and then refusing would be a trap.)"""
+    try:
+        [_rule_of(s) for s in steps]
+        return True
+    except Refused:
+        return False
+
+
+def _decided(aid, steps, decision):
+    """Carry out his inline answer and tell the model what happened."""
+    what = [s["what"] for s in steps]
+    if decision["choice"] == "no":
+        discard_action(aid)
+        out = {"declined": True, "action_id": aid, "steps": what,
+               "note": "He said NO — nothing ran. Don't propose the same change "
+                       "again; follow what he said instead."}
+        if decision["reason"]:
+            out["he_said"] = decision["reason"]
+        return out
+    res = allow_and_run(aid) if decision["choice"] == "always" else run_action(aid)
+    out = {"ran": True, "action_id": aid, "steps": what, "ok": bool(res.get("ok")),
+           "verified": bool(res.get("verified")), "result": describe_result(res)}
+    if res.get("rules_added"):
+        out["always_allowed_now"] = res["rules_added"]
+    if res.get("ok"):
+        out["note"] = ("He approved it and it RAN" + (" — checked, it took effect"
+                       if res.get("verified") else "") + ". Report that; ctrl+z/rewind undoes it.")
+    else:
+        out["error"] = f"he approved it but it FAILED: {res.get('error')}"
+    return out
 
 
 def discard_action(aid):
@@ -1259,8 +1300,8 @@ TOOL = {"type": "function", "function": {
     "name": "propose_action",
     "description": "CHANGE his machine: install/remove software (apt, flatpak), settings "
                    "(gsettings), services, docker, close apps, make/move/copy/trash files. "
-                   "Stages it; runs only when he approves in F4. Steps joined with &&. "
-                   "`undo_last`=true undoes the last change.",
+                   "He is asked to approve it; it runs only on his yes and the result "
+                   "comes back to you. Steps joined with &&. `undo_last`=true undoes the last change.",
     "parameters": {"type": "object", "properties": {
         "commands": {"type": "string"}, "why": {"type": "string"},
         "undo_last": {"type": "boolean"}}}}}

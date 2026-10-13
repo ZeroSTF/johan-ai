@@ -163,6 +163,54 @@ def file_command_checks():
     return results
 
 
+def approval_checks():
+    """A change proposed from the phone waits for a button; Run runs it and
+    hands the result back to Johan; No discards; a stranger's tap does nothing."""
+    import shutil
+    import tempfile
+    import johan_actions as jx
+    tmp = Path(tempfile.mkdtemp())
+    scratch = Path.home() / ".cache/johan-tg-approval-test"
+    shutil.rmtree(scratch, ignore_errors=True)
+    scratch.mkdir(parents=True)
+    results, turns = {}, []
+    real = (jx.PENDING, jx.LOG, ja.run_turn, tg.ollama_up, ja.prime_with_memories)
+
+    def fake_turn(messages, on_tool=None, **kw):
+        turns.append(messages[-1]["content"])
+        if len(turns) in (1, 3):                 # his request → Johan proposes a change
+            d = scratch / f"dir{len(turns)}"
+            on_tool("propose_action", {"commands": f"mkdir {d}"}, jx.propose_action(f"mkdir {d}"))
+            return "I'd like to create that folder."
+        return "Done — it's there."
+    jx.PENDING, jx.LOG = tmp / "p.json", tmp / "l.json"
+    ja.run_turn, tg.ollama_up = fake_turn, (lambda: True)
+    ja.prime_with_memories = lambda s, *a, **k: s
+    try:
+        bot = FakeBot({ME})
+        tg.handle_update(bot, update(ME, "make me a folder"))
+        pend = bot.pending.get(ME)
+        results["a proposed change gets buttons"] = bool(pend) and pend["kind"] == "approve" \
+            and pend["labels"][0] == tg.RUN
+        results["…and nothing ran yet"] = not (scratch / "dir1").exists()
+        tg.handle_update(bot, press(STRANGER, f"{pend['id']}:0"))
+        results["a stranger's tap runs nothing"] = not (scratch / "dir1").exists()
+        tg.handle_update(bot, press(ME, f"{pend['id']}:0"))
+        results["Run runs it"] = (scratch / "dir1").is_dir()
+        results["…and Johan carries on with the result"] = len(turns) == 2 \
+            and turns[1].startswith("[he approved that change")
+        tg.handle_update(bot, update(ME, "and another"))
+        pend = bot.pending.get(ME)
+        tg.handle_update(bot, press(ME, f"{pend['id']}:{len(pend['labels']) - 1}"))
+        results["No runs nothing and clears it"] = not (scratch / "dir3").exists() \
+            and jx.list_actions() == []
+    finally:
+        jx.PENDING, jx.LOG, ja.run_turn, tg.ollama_up, ja.prime_with_memories = real
+        shutil.rmtree(scratch, ignore_errors=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+    return results
+
+
 def aq_latest():
     return tg.aq.latest_queue
 
@@ -336,6 +384,7 @@ def main():
     results.update(draw_checks())
     results.update(file_command_checks())
     results.update(button_checks())
+    results.update(approval_checks())
 
     saved = {k: os.environ.pop(k, None) for k in ("DISPLAY", "WAYLAND_DISPLAY")}
     try:

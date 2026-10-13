@@ -256,6 +256,12 @@ class PromptArea(TextArea):
         self.load_text(str(text or ""))
         self.cursor_position = len(self.text)
 
+    def insert_text_at_cursor(self, text):
+        """Input's API, still used by Choices to hand a typed letter to the
+        prompt — without it, typing your own answer to options CRASHED the
+        app once the prompt became a TextArea."""
+        self.insert(str(text))
+
     @property
     def cursor_position(self):
         return self.document.get_index_from_location(self.cursor_location)
@@ -311,3 +317,88 @@ class PromptArea(TextArea):
         self._suggestion = hint
         self.suggestion = hint[len(text):] if hint.lower().startswith(text.lower()) and \
             self.cursor_position == len(text) else ""
+
+
+# ================================================================ approval
+from textual.containers import Vertical as _Vertical  # noqa: E402
+
+
+class ApprovalCard(_Vertical):
+    """Johan wants to change something: shown inline, the turn waits.
+
+    1 yes · 2 always allow this kind (only when every step can be a rule) ·
+    last = no · typing says no and tells Johan what to do instead · esc stops
+    the turn. After the decision the card stays, showing it."""
+
+    DEFAULT_CSS = """
+    ApprovalCard { height: auto; margin: 0 0 1 1; padding: 0 1;
+                   border: round $warning 60%; }
+    ApprovalCard > .ap-title { height: auto; }
+    ApprovalCard > .ap-body { height: auto; max-height: 24; overflow-y: auto; }
+    ApprovalCard > .ap-done { height: auto; }
+    """
+    MAX_DIFF_LINES = 40
+
+    def __init__(self, kind, item, **kw):
+        super().__init__(**kw)
+        self.kind, self.item = kind, item
+        if kind == "action":
+            opts = ["Yes, run it"]
+            if item.get("can_always"):
+                opts.append("Yes, and always allow this kind")
+            opts.append("No")
+        else:
+            opts = ["Yes, apply it", "No"]
+        # Numbers only, no letter shortcuts: with "y" bound, starting to type
+        # "yeah but use mpv instead" would APPROVE the change on its first key.
+        # Any letter starts a free answer in the prompt (= no, do this instead).
+        self.options = opts
+        short = {"Yes, run it": "run", "Yes, apply it": "apply",
+                 "Yes, and always allow this kind": "always allow", "No": "no"}
+        nums = " · ".join(f"{i} {short[o]}" for i, o in enumerate(opts, 1))
+        self.choices = Choices(opts, hint=f"{nums} · or type what you want instead · esc stops")
+
+    def compose(self):
+        yield Static(self._title(), classes="ap-title")
+        yield Static(self._body(), classes="ap-body")
+        yield self.choices
+
+    def _title(self):
+        if self.kind == "action":
+            root = " [b $error]needs your password[/]" if self.item.get("root") else ""
+            return mk("[b $warning]⏵ Johan wants to change something" + root + "[/]  [$text-muted]$w[/]",
+                      w=self.item.get("why") or "")
+        return mk("[b $warning]⏵ Johan wants to edit[/] [b]$p[/]  [$text-muted]$w[/]",
+                  p=self.item.get("path", "?"), w=self.item.get("why") or "")
+
+    def _body(self):
+        lines = []
+        if self.kind == "action":
+            for i, st in enumerate(self.item.get("steps", []), 1):
+                tag = "[$error]root[/] " if st.get("root") else ""
+                lines.append(mk(f"{i}. {tag}$w", w=st.get("what", "")))
+                lines.append(mk("   [$accent]$c[/]", c="$ " + str(st.get("shown", ""))))
+                if st.get("undo"):
+                    lines.append(mk("   [$text-muted]undo: $u[/]", u=" ".join(map(str, st["undo"]))))
+                elif st.get("undo_note"):
+                    lines.append(mk("   [$text-muted]undo: $u[/]", u=st["undo_note"]))
+                else:
+                    lines.append(Content.from_markup("   [$warning]no automatic undo[/]"))
+        else:
+            diff = (self.item.get("diff") or "").splitlines()
+            for line in diff[:self.MAX_DIFF_LINES]:
+                style = ("$text-muted" if line.startswith(("+++", "---")) else
+                         "$accent" if line.startswith("@@") else
+                         "$success" if line.startswith("+") else
+                         "$error" if line.startswith("-") else "$text-muted")
+                lines.append(mk(f"[{style}]$l[/]", l=line))
+            if len(diff) > self.MAX_DIFF_LINES:
+                lines.append(Content.from_markup(
+                    f"[$text-muted]… {len(diff) - self.MAX_DIFF_LINES} more lines[/]"))
+        return Content("\n").join(lines) if lines else Content("")
+
+    def decided(self, text, ok=True):
+        """Replace the options with the decision, so the chat keeps a record."""
+        self.choices.retire()
+        style = "$success" if ok else "$text-muted"
+        self.mount(Static(mk(f"[{style}]→ $t[/]", t=text), classes="ap-done"))
