@@ -34,6 +34,11 @@ the tenth proposal of the day is not careful review:
      staged as a new proposal — it gets approved like anything else.
 
 Re-validated at run time: the machine can change between proposal and `y`.
+
+Checked after doing: every step that exits 0 is then re-read from the
+machine in CODE (`_check`, no model call) — the setting holds the new value,
+the unit is active, the package is installed, the file exists. rc 0 is not
+proof; a step that "succeeded" but didn't take effect fails the change.
 """
 
 import json
@@ -44,6 +49,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -51,6 +57,12 @@ ROOT = Path.home() / "johan"
 PENDING = ROOT / "brain/pending-actions.json"
 LOG = ROOT / "brain/actions-log.json"
 LOG_KEEP = 60
+ALLOW_RULES = ROOT / "brain/allow-rules.json"
+AUTO_ALLOW = True        # the eval harness turns this off: a test must never change his machine
+EDITS_LOG = ROOT / "brain/edits-log.json"
+# Which chat turn is running, so every change and edit it proposes can be
+# found again by rewind. Set by the UI around a turn; None otherwise.
+TURN = None
 HOME = Path.home().resolve()
 MAX_STEPS = 6
 
@@ -680,9 +692,25 @@ def propose_action(commands=None, why="", undo_last=False, _undo_of=None):
     action = {"id": aid, "why": (why or "").strip()[:300],
               "created": datetime.now().isoformat(timespec="seconds"),
               "steps": steps, "root": any(s["root"] for s in steps),
-              "undo_of": _undo_of}
+              "undo_of": _undo_of, "turn": TURN}
     pending.append(action)
     _save(PENDING, pending)
+    # An always-allow rule covers every step: run it now, through exactly
+    # the same run_action as `y` (re-validated, checked, logged, undoable),
+    # and hand the outcome back so the model reports it as done, not staged.
+    # Undos are never auto-run: `u` staging one means he wants to look.
+    if AUTO_ALLOW and _undo_of is None and covered_by_rules(steps):
+        res = run_action(aid, auto=True)
+        out = {"ran": True, "auto_allowed": True, "action_id": aid,
+               "steps": [s["what"] for s in steps], "ok": bool(res.get("ok")),
+               "verified": bool(res.get("verified")), "result": describe_result(res)}
+        if res.get("ok"):
+            out["note"] = ("ALREADY RUN — he always-allows this kind of change. Tell him "
+                           "it's done" + (" and checked" if res.get("verified") else "")
+                           + "; `u` in F4 undoes it.")
+        else:
+            out["error"] = f"it ran automatically and FAILED: {res.get('error')}"
+        return out
     return {"proposed": True, "action_id": aid,
             "steps": [s["what"] for s in steps],
             "needs_password": action["root"],
@@ -724,8 +752,162 @@ def _exec(step):
     return rc, out
 
 
-def run_action(aid):
-    """Run an approved change. Called from the UI on `y`, never by the model."""
+# ------------------------------------------------------------------ check after doing
+#
+# rc 0 means the program didn't complain, not that the machine changed: a
+# user unit can exit 0 and die a second later, pkill exits 0 while the
+# process ignores TERM, gsettings accepts a key a schema override pins. Each
+# step is read back from the machine after it runs. No model call — this is
+# a comparison, and a 4B model asked "did it work?" says yes.
+
+def _settle(probe, tries=6, delay=0.5):
+    """Re-run `probe` until it says True (services and processes take a
+    moment to get there); returns its last (verdict, message)."""
+    v, msg = probe()
+    for _ in range(tries - 1):
+        if v is True:
+            break
+        time.sleep(delay)
+        v, msg = probe()
+    return v, msg
+
+
+_GV_TYPE = re.compile(r"^(@[a-z()]+|u?int(16|32|64)|byte|double)\s+")
+
+
+def _gs_norm(v):
+    """gsettings prints `'prefer-dark'`, `uint32 300`, `@as []`; the model
+    writes prefer-dark, 300, []. Compare meaning, not spelling."""
+    v = _GV_TYPE.sub("", (v or "").strip()).replace('"', "'")
+    v = re.sub(r"\s*,\s*", ", ", v)
+    if len(v) >= 2 and v[0] == v[-1] == "'":
+        v = v[1:-1]
+    try:
+        return float(v)
+    except ValueError:
+        return v
+
+
+def _mode_ok(spec, mode):
+    """Does `mode` satisfy chmod `spec`? None when it depends on things not
+    worth modelling here (=, X)."""
+    if re.fullmatch(r"0?[0-7]{3}", spec):
+        return mode == int(spec, 8)
+    m = re.fullmatch(r"([ugoa]*)([+-])([rwx]+)", spec)
+    if not m:
+        return None
+    bits = 0
+    for w in (m[1] or "u").replace("a", "ugo"):
+        for b in m[3]:
+            bits |= {"r": 4, "w": 2, "x": 1}[b] << {"u": 6, "g": 3, "o": 0}[w]
+    return (mode & bits) == bits if m[2] == "+" else not (mode & bits)
+
+
+def _check(step):
+    """Did this step take effect? → (True | False | None, message).
+    None = no meaningful check (apt update, gsettings reset, chmod =…)."""
+    a = step["argv"]
+    prog = Path(a[0]).name
+    try:
+        if prog == "gsettings":
+            if a[1] != "set":
+                return None, "a reset is not checked"
+            key, want = a[3], a[4]
+            rc, out = _probe(["gsettings", "get", a[2], key])
+            if rc != 0:
+                return None, f"could not read {key} back"
+            if _gs_norm(out) == _gs_norm(want):
+                return True, f"{key} now reads {out.strip()}"
+            return False, f"the setting still reads {out.strip()}"
+        if prog == "systemctl":
+            base = ["systemctl"] + (["--user"] if "--user" in a else [])
+            sub, unit = a[-2], a[-1]
+            if sub in ("enable", "disable"):
+                st = _probe(base + ["is-enabled", unit])[1].strip()
+                if (st == "enabled") != (sub == "enable"):
+                    return False, f"{unit} is still {st or 'unknown'}"
+                if "--now" not in a:
+                    return True, f"{unit} is {st}"
+            want = sub in ("start", "restart", "enable")
+
+            def probe():
+                st = _probe(base + ["is-active", unit])[1].strip()
+                if st in ("activating", "deactivating", "reloading"):
+                    return None, f"{unit} is still {st}"
+                return (st == "active") == want, f"{unit} is {st or 'unknown'}"
+            return _settle(probe)
+        if prog in ("apt-get", "apt"):
+            w = [x for x in a[1:] if not x.startswith("-")]
+            if not w or w[0] not in ("install", "remove"):
+                return None, f"apt {w[0] if w else ''} is not checked"
+            inst = w[0] == "install"
+            bad = [p for p in w[1:] if _installed(p) != inst]
+            if bad:
+                return False, f"{', '.join(bad)} {'still not installed' if inst else 'still installed'}"
+            return True, f"{'installed' if inst else 'removed'}: {', '.join(w[1:])}"
+        if prog == "flatpak":
+            sub, app = a[1], a[-1]
+            if sub not in ("install", "uninstall"):
+                return None, "flatpak update is not checked"
+            there = _probe(["flatpak", "info", app])[0] == 0
+            if there != (sub == "install"):
+                return False, f"{app} is still {'missing' if sub == 'install' else 'installed'}"
+            return True, f"{app} {'installed' if there else 'removed'}"
+        if prog == "docker":
+            sub, name = a[1], a[2]
+            if sub == "pull":
+                ok = _probe(["docker", "image", "inspect", name])[0] == 0
+                return ok, f"image {name} {'is present' if ok else 'is still missing'}"
+            want = {"stop": ("exited", "created", "dead"),
+                    "pause": ("paused",)}.get(sub, ("running",))
+
+            def probe():
+                st = _probe(["docker", "inspect", "-f", "{{.State.Status}}", name])[1].strip()
+                return st in want, f"{name} is {st or 'unknown'}"
+            return _settle(probe)
+        if prog == "gnome-extensions":
+            m = re.search(r"State:\s*(\w+)", _probe(["gnome-extensions", "info", a[2]])[1])
+            st = m[1].upper() if m else "UNKNOWN"
+            if (st in ("ENABLED", "ACTIVE")) != (a[1] == "enable"):
+                return False, f"{a[2]} is still {st}"
+            return True, f"{a[2]} is {st}"
+        if prog == "xdg-mime":
+            bad = [m for m in a[3:]
+                   if _probe(["xdg-mime", "query", "default", m])[1].strip() != a[2]]
+            if bad:
+                return False, f"{', '.join(bad)} still opens with something else"
+            return True, f"{a[2]} is the default"
+        if prog in ("pkill", "kill"):
+            gone = ((lambda: _probe(["pgrep", "-x", a[-1]])[0] != 0) if prog == "pkill"
+                    else (lambda: not Path(f"/proc/{a[-1]}").exists()))
+            return _settle(lambda: (gone(), f"{a[-1]} " + ("is gone" if gone() else "is still running")))
+        if prog in ("mkdir", "touch", "cp", "ln"):
+            p = Path(a[-1])
+            ok = {"mkdir": p.is_dir, "ln": p.is_symlink}.get(prog, lambda: os.path.lexists(p))()
+            return ok, f"{p} {'exists' if ok else 'does not exist'}"
+        if prog == "mv":
+            if not os.path.lexists(a[-1]):
+                return False, f"{a[-1]} does not exist"
+            if os.path.lexists(a[-2]):
+                return False, f"{a[-2]} is still there"
+            return True, f"{a[-1]} exists, {a[-2]} is gone"
+        if prog == "chmod":
+            mode = stat.S_IMODE(Path(a[-1]).stat().st_mode)
+            v = _mode_ok(a[1], mode)
+            return v, (f"mode still reads {oct(mode)[2:]}" if v is False
+                       else f"mode is {oct(mode)[2:]}")
+        if prog == "rmdir" or (prog == "gio" and a[1] == "trash"):
+            left = [x for x in a[(1 if prog == "rmdir" else 2):] if os.path.lexists(x)]
+            return not left, (f"still there: {', '.join(left)}" if left else "gone")
+    except (OSError, IndexError, KeyError) as e:
+        return None, f"could not check: {e}"
+    return None, "no check for this step"
+
+
+def run_action(aid, auto=False):
+    """Run an approved change. Called from the UI on `y` — or by
+    propose_action when an always-allow rule covers every step — never by
+    the model's own choice."""
     pending = list_actions()
     action = next((a for a in pending if a["id"] == int(aid)), None)
     if not action:
@@ -736,27 +918,52 @@ def run_action(aid):
     except Refused as e:
         _save(PENDING, [a for a in pending if a["id"] != action["id"]])
         return {"error": f"not run — no longer valid: {e}", "dropped": True}
-    results, undo, ok = [], [], True
+    results, undo, no_undo, failure = [], [], [], None
     for step in fresh:
         rc, out = _exec(step)
-        results.append({"step": step["shown"], "rc": rc, "output": out[-1500:]})
+        res = {"step": step["shown"], "rc": rc, "output": out[-1500:]}
+        results.append(res)
         if rc != 0:
-            ok = False
+            failure = f"step {len(results)} failed (exit {rc}): {out[-300:] or 'no output'}"
+            break
+        res["verified"], res["check"] = _check(step)
+        if res["verified"] is False:
+            # It ran but didn't take effect, so its undo would act on a state
+            # that doesn't exist: not recorded.
+            failure = f"step {len(results)} ran, but {res['check']}"
             break
         if step.get("undo"):
             undo.insert(0, _q(step["undo"]))
-    entry = {"id": action["id"], "why": action["why"], "undo_of": action.get("undo_of"), "ran": datetime.now().isoformat(timespec="seconds"),
-             "ok": ok, "results": results, "undo": undo,
+        else:
+            no_undo.append(step["what"] + (f" ({step['undo_note']})" if step.get("undo_note") else ""))
+    ok = failure is None
+    verified = ok and all(r.get("verified") is True for r in results)
+    unchecked = [r["step"] for r in results if "verified" in r and r["verified"] is None]
+    entry = {"id": action["id"], "why": action["why"], "undo_of": action.get("undo_of"),
+             "turn": action.get("turn"), "auto": auto,
+             "ran": datetime.now().isoformat(timespec="seconds"),
+             "ok": ok, "verified": verified, "results": results, "undo": undo,
+             "no_undo": no_undo,
              "undo_note": next((s.get("undo_note") for s in fresh if s.get("undo_note")), None)}
     log = _load(LOG, [])
     log.append(entry)
     _save(LOG, log[-LOG_KEEP:])
     _save(PENDING, [a for a in pending if a["id"] != action["id"]])
-    failed = results[-1] if not ok else None
     return {"ok": ok, "id": action["id"], "steps_run": len(results),
             "steps_total": len(fresh), "undo": undo, "results": results,
-            **({"error": f"step {len(results)} failed (exit {failed['rc']}): "
-                         f"{failed['output'][-300:] or 'no output'}"} if failed else {})}
+            "verified": verified, "unchecked": unchecked,
+            **({"error": failure} if failure else {})}
+
+
+def describe_result(res):
+    """One line for a toast/notification: 'done — verified' vs 'ran but not
+    verified', so rc 0 is never presented as proof."""
+    if res.get("error"):
+        return res["error"]
+    n = res.get("steps_run", 0)
+    if res.get("verified"):
+        return f"done — verified ({n} step{'s' * (n != 1)})"
+    return f"ran but not verified ({', '.join(res.get('unchecked') or [])[:120]} has no check)"
 
 
 def recent(n=10):
@@ -785,6 +992,267 @@ def propose_undo(aid=None):
                 e["undone"] = res["action_id"]
         _save(LOG, full)
     return res
+
+
+# ------------------------------------------------------------------ always-allow rules
+#
+# `Y` in F4 = run this and don't ask again for this exact kind of change.
+# Only kinds whose worst case is a setting he flips back or a service he
+# restarts can be rules, and each rule is program + subcommand + ONE target
+# (a gsettings key, a user unit, a container, a parent folder) — never "all
+# gsettings". Never: root steps, apt/flatpak (they pull in arbitrary
+# packages), gio trash/mv/cp/chmod (files), kill/pkill, docker pull.
+# The file is re-validated against this table on every load, so a rule
+# written into it by hand (or by anything else) for a forbidden kind is
+# ignored, not obeyed.
+
+ALLOWABLE = {
+    "gsettings": {"set", "reset"},
+    "systemctl --user": {"start", "stop", "restart"},
+    "docker": {"start", "stop", "restart"},
+    "gnome-extensions": {"enable", "disable"},
+    "mkdir": {"in"},
+}
+_TARGET = {
+    "gsettings": re.compile(r"^[A-Za-z0-9_.-]+(:/[A-Za-z0-9_/.-]+)? [A-Za-z0-9_-]+$"),
+    "systemctl --user": re.compile(r"^[A-Za-z0-9_@.:-]+$"),
+    "docker": re.compile(r"^[A-Za-z0-9_.-]+$"),
+    "gnome-extensions": re.compile(r"^[A-Za-z0-9_@.-]+$"),
+}
+WHY_NOT = ("only low-risk kinds can be always-allowed: gsettings set/reset of one key, "
+           "systemctl --user start/stop/restart of one unit, docker start/stop/restart "
+           "of one container, gnome-extensions enable/disable, mkdir in one folder")
+
+
+def _rule_valid(prog, sub, target):
+    if prog not in ALLOWABLE or sub not in ALLOWABLE[prog]:
+        return False
+    if not isinstance(target, str) or not target or len(target) > 300:
+        return False
+    if prog == "mkdir":
+        p = Path(target)
+        if not p.is_absolute() or os.path.normpath(target) != target:
+            return False
+        if not (p == HOME or HOME in p.parents) or ".git" in p.parts:
+            return False
+        if _jt().SENSITIVE.search(target):
+            return False
+        return not any(p == d or d in p.parents for d in PROTECTED_DIRS)
+    if not _TARGET[prog].match(target):
+        return False
+    return not (prog == "systemctl --user" and PROTECTED_UNITS.match(target))
+
+
+def _rule_of(step):
+    """The narrowest rule that covers `step` → (prog, sub, target), or
+    Refused saying why this kind can never be always-allowed."""
+    if step.get("root"):
+        raise Refused(f"`{step['shown']}` needs root — root steps are always approved "
+                      f"one at a time")
+    a = step["argv"]
+    prog = Path(a[0]).name
+    rule = None
+    if prog == "gsettings" and len(a) >= 4:
+        rule = ("gsettings", a[1], f"{a[2]} {a[3]}")
+    elif prog == "systemctl" and "--user" in a:
+        rule = ("systemctl --user", a[-2], a[-1])
+    elif prog in ("docker", "gnome-extensions") and len(a) == 3:
+        rule = (prog, a[1], a[2])
+    elif prog == "mkdir":
+        rule = ("mkdir", "in", str(Path(a[-1]).parent))
+    if rule is None or not _rule_valid(*rule):
+        raise Refused(f"`{step['shown']}` can't be always-allowed — {WHY_NOT}")
+    return rule
+
+
+def load_rules():
+    """Valid rules only — anything in the file outside ALLOWABLE is dropped."""
+    raw = _load(ALLOW_RULES, [])
+    return [r for r in (raw if isinstance(raw, list) else [])
+            if isinstance(r, dict) and _rule_valid(r.get("prog"), r.get("sub"), r.get("target"))]
+
+
+def rule_text(r):
+    if r["prog"] == "mkdir":
+        return f"create folders in {r['target']}"
+    return f"{r['prog']} {r['sub']} {r['target']}"
+
+
+def covered_by_rules(steps):
+    if not steps:
+        return False
+    have = {(r["prog"], r["sub"], r["target"]) for r in load_rules()}
+    try:
+        return all(_rule_of(s) in have for s in steps)
+    except Refused:
+        return False
+
+
+def allow_and_run(aid):
+    """`Y`: run a pending change and always allow its kind from now on. If
+    any step can't be a rule, NOTHING runs — he pressed Y expecting a rule,
+    and a silent run-once would be a surprise either way."""
+    action = next((a for a in list_actions() if a["id"] == int(aid)), None)
+    if not action:
+        return {"error": f"no pending change {aid}"}
+    try:
+        new = [_rule_of(s) for s in action["steps"]]
+    except Refused as e:
+        return {"error": f"not run — {e}. Press y to run it once.", "not_run": True}
+    res = run_action(aid)
+    if res.get("ok"):
+        rules = load_rules()
+        have = {(r["prog"], r["sub"], r["target"]) for r in rules}
+        stamp = datetime.now().isoformat(timespec="seconds")
+        added = [{"prog": p, "sub": s, "target": t, "added": stamp}
+                 for p, s, t in dict.fromkeys(new) if (p, s, t) not in have]
+        _save(ALLOW_RULES, rules + added)
+        res["rules_added"] = [rule_text(r) for r in added]
+    return res
+
+
+def remove_rule(n):
+    """Forget always-allow rule number `n` (1-based, as /rules lists them)."""
+    rules = load_rules()
+    if not str(n).isdigit() or not 1 <= int(n) <= len(rules):
+        return {"error": f"no rule {n} — /rules lists them"}
+    gone = rules.pop(int(n) - 1)
+    _save(ALLOW_RULES, rules)
+    return {"removed": rule_text(gone)}
+
+
+# ------------------------------------------------------------------ rewind
+#
+# Undo the last chat turn: the conversation AND what it changed. Every
+# change/edit records the turn that proposed it (TURN), so a change approved
+# with `y` minutes later still belongs to the turn that asked for it.
+# Changes are reverted by running their recorded undo through the same
+# propose → run_action path (re-validated, checked, logged); edits by putting
+# the old text back. What has no undo (apt upgrade, a closed app, a trashed
+# file) is listed up front, never silently skipped.
+
+def new_turn():
+    global TURN
+    TURN = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    return TURN
+
+
+def end_turn():
+    global TURN
+    TURN = None
+
+
+def note_edit_applied(edit, target, backup, after):
+    """Called by johan_tools.apply_edit, so an applied edit can be rewound."""
+    import hashlib
+    log = _load(EDITS_LOG, [])
+    log.append({"id": edit["id"], "path": edit["path"], "abs_path": str(target),
+                "backup": str(backup), "old_string": edit["old_string"],
+                "new_string": edit["new_string"], "turn": edit.get("turn"),
+                "after_sha": hashlib.sha256(after.encode()).hexdigest(),
+                "applied": datetime.now().isoformat(timespec="seconds")})
+    _save(EDITS_LOG, log[-LOG_KEEP:])
+
+
+def _turn_items(turn):
+    log = [e for e in _load(LOG, []) if turn and e.get("turn") == turn]
+    edits = [e for e in _load(EDITS_LOG, []) if turn and e.get("turn") == turn]
+    return {
+        "actions": [e for e in log if not e.get("undo_of") and not e.get("undone")],
+        "redone": [e for e in log if e.get("undo_of")],
+        "edits": [e for e in edits if not e.get("reverted")],
+        "pending": [a for a in list_actions() if turn and a.get("turn") == turn],
+        "pending_edits": [e for e in _jt()._load_edits() if turn and e.get("turn") == turn],
+    }
+
+
+def rewind_plan(turn):
+    """What rewinding `turn` will revert, discard, and can't undo — shown to
+    him before anything happens. All three empty → nothing to confirm."""
+    it = _turn_items(turn)
+    plan = {"revert": [], "discard": [], "cannot": []}
+    for e in reversed(it["actions"]):
+        label = f"change #{e['id']}" + (f" ({e['why'][:60]})" if e.get("why") else "")
+        if e.get("undo"):
+            root = any(Path(u.split()[0]).name in ("apt", "apt-get") or
+                       (u.startswith("systemctl ") and "--user" not in u) for u in e["undo"])
+            plan["revert"].append(f"{label}: {' && '.join(e['undo'])}"
+                                  + (" (asks for your password)" if root else ""))
+        for n in e.get("no_undo") or ([] if e.get("undo") or not e.get("ok") else ["its steps"]):
+            plan["cannot"].append(f"{label}: {n} — no automatic undo")
+    for e in it["redone"]:
+        plan["cannot"].append(f"change #{e['id']} was an undo of #{e['undo_of']} — not re-done")
+    for e in reversed(it["edits"]):
+        plan["revert"].append(f"edit e{e['id']}: put {e['path']} back as it was")
+    for a in it["pending"]:
+        plan["discard"].append(f"waiting change a{a['id']}: "
+                               + "; ".join(s["what"] for s in a["steps"])[:80])
+    for e in it["pending_edits"]:
+        plan["discard"].append(f"waiting edit e{e['id']} to {e['path']}")
+    return plan
+
+
+def _revert_edit(e):
+    import hashlib
+    try:
+        target, _ = _jt()._edit_path(e["abs_path"])
+    except ValueError as err:
+        return f"{e['path']}: {err}"
+    cur = target.read_text()
+    new, old = e["new_string"], e["old_string"]
+    before = None
+    if hashlib.sha256(cur.encode()).hexdigest() == e["after_sha"]:
+        try:
+            before = Path(e["backup"]).read_text()        # exactly what it was
+        except OSError:
+            pass
+    if before is None and new and cur.count(new) == 1:
+        before = cur.replace(new, old, 1)                 # file moved on since: surgical
+    if before is None:
+        return f"{e['path']} changed since — restore it by hand from {e['backup']}"
+    target.write_text(before)
+    return None
+
+
+def rewind_apply(turn):
+    """Revert everything `turn` changed (after he confirmed rewind_plan).
+    Returns what was reverted, what failed, what was discarded."""
+    it = _turn_items(turn)
+    out = {"reverted": [], "failed": [], "discarded": []}
+    for a in it["pending"]:
+        discard_action(a["id"])
+        out["discarded"].append(f"change a{a['id']}")
+    for e in it["pending_edits"]:
+        _jt().discard_edit(e["id"])
+        out["discarded"].append(f"edit e{e['id']}")
+    for e in reversed(it["actions"]):
+        if not e.get("undo"):
+            continue
+        res = propose_action(" && ".join(e["undo"]), why=f"rewind: undo change #{e['id']}",
+                             _undo_of=e["id"])
+        if not res.get("proposed"):
+            out["failed"].append(f"change #{e['id']}: undo can't run now — {res.get('error')}")
+            continue
+        full = _load(LOG, [])
+        for x in full:
+            if x["id"] == e["id"]:
+                x["undone"] = res["action_id"]
+        _save(LOG, full)
+        run = run_action(res["action_id"])
+        (out["reverted"] if run.get("ok") else out["failed"]).append(
+            f"change #{e['id']}" + ("" if run.get("ok") else f": {run.get('error')}"))
+    log = _load(EDITS_LOG, [])
+    for e in reversed(it["edits"]):
+        err = _revert_edit(e)
+        if err:
+            out["failed"].append(f"edit e{e['id']}: {err}")
+            continue
+        for x in log:
+            if x["id"] == e["id"] and x.get("applied") == e.get("applied"):
+                x["reverted"] = datetime.now().isoformat(timespec="seconds")
+        out["reverted"].append(f"edit e{e['id']} ({e['path']})")
+    _save(EDITS_LOG, log)
+    return out
 
 
 TOOL = {"type": "function", "function": {

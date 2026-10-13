@@ -1328,7 +1328,7 @@ def propose_edit(path, old_string, new_string, why=""):
         "path": display, "abs_path": str(target),
         "old_string": old_string, "new_string": new_string,
         "why": why or "", "created": datetime.now().isoformat(timespec="seconds"),
-        "diff": diff,
+        "diff": diff, "turn": _actions.TURN,     # so rewind can find it
     })
     _save_edits(edits)
     return {"proposed": True, "edit_id": edit_id, "path": display,
@@ -1384,6 +1384,10 @@ def apply_edit(edit_id):
                      "reverted": True, "backup": str(backup)}
 
     _save_edits([e for e in edits if e["id"] != int(edit_id)])
+    try:
+        _actions.note_edit_applied(edit, target, backup, after)   # for rewind
+    except Exception:
+        pass
     return {"applied": True, "path": edit["path"], "backup": str(backup),
             "note": "backup kept in brain/edit-backups/"}
 
