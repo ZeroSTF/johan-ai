@@ -34,6 +34,11 @@ the tenth proposal of the day is not careful review:
      staged as a new proposal — it gets approved like anything else.
 
 Re-validated at run time: the machine can change between proposal and `y`.
+
+Checked after doing: every step that exits 0 is then re-read from the
+machine in CODE (`_check`, no model call) — the setting holds the new value,
+the unit is active, the package is installed, the file exists. rc 0 is not
+proof; a step that "succeeded" but didn't take effect fails the change.
 """
 
 import json
@@ -44,6 +49,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -724,8 +730,162 @@ def _exec(step):
     return rc, out
 
 
-def run_action(aid):
-    """Run an approved change. Called from the UI on `y`, never by the model."""
+# ------------------------------------------------------------------ check after doing
+#
+# rc 0 means the program didn't complain, not that the machine changed: a
+# user unit can exit 0 and die a second later, pkill exits 0 while the
+# process ignores TERM, gsettings accepts a key a schema override pins. Each
+# step is read back from the machine after it runs. No model call — this is
+# a comparison, and a 4B model asked "did it work?" says yes.
+
+def _settle(probe, tries=6, delay=0.5):
+    """Re-run `probe` until it says True (services and processes take a
+    moment to get there); returns its last (verdict, message)."""
+    v, msg = probe()
+    for _ in range(tries - 1):
+        if v is True:
+            break
+        time.sleep(delay)
+        v, msg = probe()
+    return v, msg
+
+
+_GV_TYPE = re.compile(r"^(@[a-z()]+|u?int(16|32|64)|byte|double)\s+")
+
+
+def _gs_norm(v):
+    """gsettings prints `'prefer-dark'`, `uint32 300`, `@as []`; the model
+    writes prefer-dark, 300, []. Compare meaning, not spelling."""
+    v = _GV_TYPE.sub("", (v or "").strip()).replace('"', "'")
+    v = re.sub(r"\s*,\s*", ", ", v)
+    if len(v) >= 2 and v[0] == v[-1] == "'":
+        v = v[1:-1]
+    try:
+        return float(v)
+    except ValueError:
+        return v
+
+
+def _mode_ok(spec, mode):
+    """Does `mode` satisfy chmod `spec`? None when it depends on things not
+    worth modelling here (=, X)."""
+    if re.fullmatch(r"0?[0-7]{3}", spec):
+        return mode == int(spec, 8)
+    m = re.fullmatch(r"([ugoa]*)([+-])([rwx]+)", spec)
+    if not m:
+        return None
+    bits = 0
+    for w in (m[1] or "u").replace("a", "ugo"):
+        for b in m[3]:
+            bits |= {"r": 4, "w": 2, "x": 1}[b] << {"u": 6, "g": 3, "o": 0}[w]
+    return (mode & bits) == bits if m[2] == "+" else not (mode & bits)
+
+
+def _check(step):
+    """Did this step take effect? → (True | False | None, message).
+    None = no meaningful check (apt update, gsettings reset, chmod =…)."""
+    a = step["argv"]
+    prog = Path(a[0]).name
+    try:
+        if prog == "gsettings":
+            if a[1] != "set":
+                return None, "a reset is not checked"
+            key, want = a[3], a[4]
+            rc, out = _probe(["gsettings", "get", a[2], key])
+            if rc != 0:
+                return None, f"could not read {key} back"
+            if _gs_norm(out) == _gs_norm(want):
+                return True, f"{key} now reads {out.strip()}"
+            return False, f"the setting still reads {out.strip()}"
+        if prog == "systemctl":
+            base = ["systemctl"] + (["--user"] if "--user" in a else [])
+            sub, unit = a[-2], a[-1]
+            if sub in ("enable", "disable"):
+                st = _probe(base + ["is-enabled", unit])[1].strip()
+                if (st == "enabled") != (sub == "enable"):
+                    return False, f"{unit} is still {st or 'unknown'}"
+                if "--now" not in a:
+                    return True, f"{unit} is {st}"
+            want = sub in ("start", "restart", "enable")
+
+            def probe():
+                st = _probe(base + ["is-active", unit])[1].strip()
+                if st in ("activating", "deactivating", "reloading"):
+                    return None, f"{unit} is still {st}"
+                return (st == "active") == want, f"{unit} is {st or 'unknown'}"
+            return _settle(probe)
+        if prog in ("apt-get", "apt"):
+            w = [x for x in a[1:] if not x.startswith("-")]
+            if not w or w[0] not in ("install", "remove"):
+                return None, f"apt {w[0] if w else ''} is not checked"
+            inst = w[0] == "install"
+            bad = [p for p in w[1:] if _installed(p) != inst]
+            if bad:
+                return False, f"{', '.join(bad)} {'still not installed' if inst else 'still installed'}"
+            return True, f"{'installed' if inst else 'removed'}: {', '.join(w[1:])}"
+        if prog == "flatpak":
+            sub, app = a[1], a[-1]
+            if sub not in ("install", "uninstall"):
+                return None, "flatpak update is not checked"
+            there = _probe(["flatpak", "info", app])[0] == 0
+            if there != (sub == "install"):
+                return False, f"{app} is still {'missing' if sub == 'install' else 'installed'}"
+            return True, f"{app} {'installed' if there else 'removed'}"
+        if prog == "docker":
+            sub, name = a[1], a[2]
+            if sub == "pull":
+                ok = _probe(["docker", "image", "inspect", name])[0] == 0
+                return ok, f"image {name} {'is present' if ok else 'is still missing'}"
+            want = {"stop": ("exited", "created", "dead"),
+                    "pause": ("paused",)}.get(sub, ("running",))
+
+            def probe():
+                st = _probe(["docker", "inspect", "-f", "{{.State.Status}}", name])[1].strip()
+                return st in want, f"{name} is {st or 'unknown'}"
+            return _settle(probe)
+        if prog == "gnome-extensions":
+            m = re.search(r"State:\s*(\w+)", _probe(["gnome-extensions", "info", a[2]])[1])
+            st = m[1].upper() if m else "UNKNOWN"
+            if (st in ("ENABLED", "ACTIVE")) != (a[1] == "enable"):
+                return False, f"{a[2]} is still {st}"
+            return True, f"{a[2]} is {st}"
+        if prog == "xdg-mime":
+            bad = [m for m in a[3:]
+                   if _probe(["xdg-mime", "query", "default", m])[1].strip() != a[2]]
+            if bad:
+                return False, f"{', '.join(bad)} still opens with something else"
+            return True, f"{a[2]} is the default"
+        if prog in ("pkill", "kill"):
+            gone = ((lambda: _probe(["pgrep", "-x", a[-1]])[0] != 0) if prog == "pkill"
+                    else (lambda: not Path(f"/proc/{a[-1]}").exists()))
+            return _settle(lambda: (gone(), f"{a[-1]} " + ("is gone" if gone() else "is still running")))
+        if prog in ("mkdir", "touch", "cp", "ln"):
+            p = Path(a[-1])
+            ok = {"mkdir": p.is_dir, "ln": p.is_symlink}.get(prog, lambda: os.path.lexists(p))()
+            return ok, f"{p} {'exists' if ok else 'does not exist'}"
+        if prog == "mv":
+            if not os.path.lexists(a[-1]):
+                return False, f"{a[-1]} does not exist"
+            if os.path.lexists(a[-2]):
+                return False, f"{a[-2]} is still there"
+            return True, f"{a[-1]} exists, {a[-2]} is gone"
+        if prog == "chmod":
+            mode = stat.S_IMODE(Path(a[-1]).stat().st_mode)
+            v = _mode_ok(a[1], mode)
+            return v, (f"mode still reads {oct(mode)[2:]}" if v is False
+                       else f"mode is {oct(mode)[2:]}")
+        if prog == "rmdir" or (prog == "gio" and a[1] == "trash"):
+            left = [x for x in a[(1 if prog == "rmdir" else 2):] if os.path.lexists(x)]
+            return not left, (f"still there: {', '.join(left)}" if left else "gone")
+    except (OSError, IndexError, KeyError) as e:
+        return None, f"could not check: {e}"
+    return None, "no check for this step"
+
+
+def run_action(aid, auto=False):
+    """Run an approved change. Called from the UI on `y` — or by
+    propose_action when an always-allow rule covers every step — never by
+    the model's own choice."""
     pending = list_actions()
     action = next((a for a in pending if a["id"] == int(aid)), None)
     if not action:
@@ -736,27 +896,52 @@ def run_action(aid):
     except Refused as e:
         _save(PENDING, [a for a in pending if a["id"] != action["id"]])
         return {"error": f"not run — no longer valid: {e}", "dropped": True}
-    results, undo, ok = [], [], True
+    results, undo, no_undo, failure = [], [], [], None
     for step in fresh:
         rc, out = _exec(step)
-        results.append({"step": step["shown"], "rc": rc, "output": out[-1500:]})
+        res = {"step": step["shown"], "rc": rc, "output": out[-1500:]}
+        results.append(res)
         if rc != 0:
-            ok = False
+            failure = f"step {len(results)} failed (exit {rc}): {out[-300:] or 'no output'}"
+            break
+        res["verified"], res["check"] = _check(step)
+        if res["verified"] is False:
+            # It ran but didn't take effect, so its undo would act on a state
+            # that doesn't exist: not recorded.
+            failure = f"step {len(results)} ran, but {res['check']}"
             break
         if step.get("undo"):
             undo.insert(0, _q(step["undo"]))
-    entry = {"id": action["id"], "why": action["why"], "undo_of": action.get("undo_of"), "ran": datetime.now().isoformat(timespec="seconds"),
-             "ok": ok, "results": results, "undo": undo,
+        else:
+            no_undo.append(step["what"] + (f" ({step['undo_note']})" if step.get("undo_note") else ""))
+    ok = failure is None
+    verified = ok and all(r.get("verified") is True for r in results)
+    unchecked = [r["step"] for r in results if "verified" in r and r["verified"] is None]
+    entry = {"id": action["id"], "why": action["why"], "undo_of": action.get("undo_of"),
+             "turn": action.get("turn"), "auto": auto,
+             "ran": datetime.now().isoformat(timespec="seconds"),
+             "ok": ok, "verified": verified, "results": results, "undo": undo,
+             "no_undo": no_undo,
              "undo_note": next((s.get("undo_note") for s in fresh if s.get("undo_note")), None)}
     log = _load(LOG, [])
     log.append(entry)
     _save(LOG, log[-LOG_KEEP:])
     _save(PENDING, [a for a in pending if a["id"] != action["id"]])
-    failed = results[-1] if not ok else None
     return {"ok": ok, "id": action["id"], "steps_run": len(results),
             "steps_total": len(fresh), "undo": undo, "results": results,
-            **({"error": f"step {len(results)} failed (exit {failed['rc']}): "
-                         f"{failed['output'][-300:] or 'no output'}"} if failed else {})}
+            "verified": verified, "unchecked": unchecked,
+            **({"error": failure} if failure else {})}
+
+
+def describe_result(res):
+    """One line for a toast/notification: 'done — verified' vs 'ran but not
+    verified', so rc 0 is never presented as proof."""
+    if res.get("error"):
+        return res["error"]
+    n = res.get("steps_run", 0)
+    if res.get("verified"):
+        return f"done — verified ({n} step{'s' * (n != 1)})"
+    return f"ran but not verified ({', '.join(res.get('unchecked') or [])[:120]} has no check)"
 
 
 def recent(n=10):

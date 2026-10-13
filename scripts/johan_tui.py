@@ -1612,7 +1612,7 @@ class JohanApp(App):
             self.call_from_thread(self._toast, res["error"][:300], f"change a{aid} failed", True)
         else:
             self.call_from_thread(self._toast,
-                                  f"done — {res['steps_run']} step(s)"
+                                  jx.describe_result(res)
                                   + (" · u to undo" if res.get("undo") else ""),
                                   f"change a{aid} applied")
 

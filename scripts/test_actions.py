@@ -136,6 +136,9 @@ def main():
             run.get("ok") and moved.exists() and not f.exists()
             and stat.S_IMODE(moved.stat().st_mode) == 0o600)
         results["…and leaves nothing pending"] = not jx.list_actions()
+        results["each step is checked after it runs (verified: true)"] = (
+            run.get("verified") is True
+            and all(r.get("verified") is True for r in run["results"]))
         u = jx.propose_undo()
         results["undo is STAGED, not run"] = u.get("proposed") and moved.exists()
         jx.run_action(u["action_id"])
@@ -152,6 +155,45 @@ def main():
         r = jx.propose_action(f"mkdir {scratch}/a && mv {scratch}/missing {scratch}/b")
         results["a bad step refuses the whole change before anything runs"] = (
             "error" in r and not (scratch / "a").exists())
+
+        # ---------------------------------------------------- check after doing
+        # rc 0 but nothing happened: the step must fail verification.
+        real_exec = jx._exec
+        jx._exec = lambda step: (0, "")
+        try:
+            r = jx.propose_action(f"mkdir {scratch}/ghost && mkdir {scratch}/never", why="t")
+            run = jx.run_action(r["action_id"])
+        finally:
+            jx._exec = real_exec
+        results["rc 0 but no effect → failed, 'ran, but …'"] = (
+            run.get("ok") is False and "ran, but" in run.get("error", "")
+            and run["results"][0]["verified"] is False and run["steps_run"] == 1)
+        results["…the unverified step's undo is not recorded"] = (
+            not run["undo"] and jx.recent(1)[0]["verified"] is False)
+        results["…and the toast line says so"] = "ran, but" in jx.describe_result(run)
+
+        real_probe = jx._probe
+        jx._probe = lambda argv, timeout=30: (0, "false\n")
+        try:
+            v, msg = jx._check({"argv": ["gsettings", "set", "org.gnome.desktop.interface",
+                                         "clock-show-seconds", "true"]})
+        finally:
+            jx._probe = real_probe
+        results["gsettings that didn't stick: 'the setting still reads false'"] = (
+            v is False and "still reads false" in msg)
+        results["gsettings values compared by meaning, not spelling"] = (
+            jx._gs_norm("'prefer-dark'\n") == jx._gs_norm("prefer-dark")
+            and jx._gs_norm("uint32 300") == jx._gs_norm("300")
+            and jx._gs_norm("['<Super>v', 'x']") == jx._gs_norm('["<Super>v","x"]')
+            and jx._gs_norm("'a'") != jx._gs_norm("'b'"))
+        results["chmod modes checked (644, u+x, go-w)"] = (
+            jx._mode_ok("644", 0o644) and jx._mode_ok("u+x", 0o744)
+            and jx._mode_ok("go-w", 0o644) and not jx._mode_ok("600", 0o644)
+            and jx._mode_ok("u=rw", 0o600) is None)
+        v, _ = jx._check({"argv": ["apt-get", "-y", "update"]})
+        results["no check exists → unverified, not failed"] = v is None
+        results["…toast says 'ran but not verified'"] = "not verified" in jx.describe_result(
+            {"ok": True, "verified": False, "steps_run": 1, "unchecked": ["apt-get -y update"]})
 
         # ---------------------------------------------------- root path, stubbed
         calls = []
