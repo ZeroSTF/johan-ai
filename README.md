@@ -163,7 +163,7 @@ this one, `x` twice to delete.
 
 ### Research
 
-`/research what are the keyboard controls in Lisa the Painful and can they be remapped`
+`/research <your question>`
 
 A few minutes of searching and reading whole pages, then a short answer with
 the sources' own words quoted under it, and links. Saved so I can reread it.
@@ -171,7 +171,7 @@ the sources' own words quoted under it, and links. Saved so I can reread it.
 ### Job hunting
 
 The pipeline scrapes company job boards (Greenhouse, Lever, Ashby) and remote
-job sites, works out which postings I can actually be hired for from Tunisia,
+job sites, works out which postings I can actually be hired for from where I live,
 and builds a tailored CV for the best ones. **It never applies for me.**
 
 - "Give me 5 jobs to apply to" → each with the apply link, a ready CV (PDF)
@@ -199,15 +199,6 @@ The same assistant from my phone (only my account can use it):
 
 Options come as buttons. Changes to the PC can be *proposed* from the phone
 but only approved at the computer (except always-allowed ones).
-
----
-
-## Gaming comes first
-
-The whole stack gets out of the way when a game starts: `johan-pause` (hooked
-into GameMode) stops the model, the image engine and the background services,
-and `johan-resume` brings them back. Everything else is pinned to the CPU
-cores games don't use, and models unload from the GPU when idle.
 
 ---
 
