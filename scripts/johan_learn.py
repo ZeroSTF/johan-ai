@@ -125,16 +125,16 @@ def write_rule(prev_answer, message):
     """Gate 3: {rule, why} from one short constrained-JSON call, or None."""
     ja = _engine()
     try:
-        r = requests.post(ja.OLLAMA_CHAT, json={
-            "model": ja.MODEL, "stream": False, "think": False,
+        import johan_interrupt as ji     # esc stops it mid-wait
+        body = ji.ollama_post(ja.OLLAMA_CHAT, {
+            "model": ja.MODEL, "think": False,
             "keep_alive": ja.KEEP_ALIVE, "format": _SCHEMA,
             # Same num_ctx as the chat — anything else reloads the model.
             "options": {"temperature": 0, "num_ctx": ja.NUM_CTX, "num_predict": 80},
             "messages": [{"role": "user", "content":
                           _WRITE_PROMPT + _context(prev_answer, message)}],
         }, timeout=60)
-        r.raise_for_status()
-        out = json.loads(r.json()["message"]["content"])
+        out = json.loads(body["message"]["content"])
     except Exception:
         return None
     return clean(out.get("rule"), out.get("why"))

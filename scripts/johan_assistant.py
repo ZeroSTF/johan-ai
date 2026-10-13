@@ -49,6 +49,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import stage4_assemble as s4          # noqa: E402
 import stage5_verify as s5            # noqa: E402
 import apply_queue as aq              # noqa: E402
+import johan_interrupt as ji
 import johan_tools as jt              # noqa: E402
 
 # Hard ceiling on what any single tool result may inject into the context.
@@ -101,7 +102,7 @@ Rules:
   for package versions. system_status for machine specs (one call).
 - Files: project_files sees only ~/johan. Everything else on his machine
   (game configs, dotfiles, ~/Downloads, Steam, /etc) → run_command with
-  find/ls/cat; his home is /home/zeros. E.g. a TF2 config:
+  find/ls/cat; his home is /home/zeros. E.g. asked to check his TF2 config:
   `find /home/zeros -maxdepth 7 -ipath *Team*Fortress*/tf/cfg -type d`.
   Never say a file or folder doesn't exist without checking.
 - Installed software: `dpkg -l | grep -c ^ii` (apt count), `flatpak list --app`,
@@ -472,45 +473,42 @@ def call_model(messages, on_delta=None, no_tools=False, should_stop=None,
         "options": {"temperature": 0.3, "num_ctx": NUM_CTX},
     }
 
+    # Both modes go through johan_interrupt: the HTTP wait runs in a helper
+    # thread, esc is checked every 0.1 s (also during the seconds of prompt
+    # reading before a stream's first chunk), and a stop closes the socket so
+    # Ollama cancels the work instead of finishing it for nobody.
     if not on_delta:
-        r = requests.post(OLLAMA_CHAT, json=payload, timeout=180)
-        r.raise_for_status()
-        body = r.json()
+        try:
+            with ji.stoppable(should_stop):
+                body = ji.ollama_post(OLLAMA_CHAT, payload, timeout=180)
+        except ji.Interrupted:
+            return {"role": "assistant", "content": "", "interrupted": True}
         LAST_USAGE.update(prompt_tokens=body.get("prompt_eval_count", 0),
                           completion_tokens=body.get("eval_count", 0),
                           num_ctx=NUM_CTX)
         return body["message"]
 
     content, tool_calls, role = [], [], "assistant"
-    with requests.post(OLLAMA_CHAT, json=payload, timeout=180, stream=True) as r:
-        r.raise_for_status()
-        for line in r.iter_lines():
-            # Cooperative cancellation: closing the response mid-stream stops
-            # Ollama generating rather than making the user wait out an answer
-            # they already know is wrong.
-            if should_stop and should_stop():
-                r.close()
-                return {"role": role, "content": "".join(content),
-                        "interrupted": True}
-            if not line:
-                continue
-            try:
-                chunk = json.loads(line)
-            except ValueError:
-                continue          # a partial line is not fatal, skip it
-            msg = chunk.get("message") or {}
-            role = msg.get("role") or role
-            piece = msg.get("content") or ""
-            if piece:
-                content.append(piece)
-                on_delta(piece)
-            if msg.get("tool_calls"):
-                tool_calls.extend(msg["tool_calls"])
-            if chunk.get("done"):
-                LAST_USAGE.update(
-                    prompt_tokens=chunk.get("prompt_eval_count", 0),
-                    completion_tokens=chunk.get("eval_count", 0),
-                    num_ctx=NUM_CTX)
+    try:
+        with ji.stoppable(should_stop):
+            for chunk in ji.ollama_lines(OLLAMA_CHAT, payload, idle_timeout=180):
+                if chunk.get("error"):
+                    raise RuntimeError(f"Ollama: {chunk['error']}")
+                msg = chunk.get("message") or {}
+                role = msg.get("role") or role
+                piece = msg.get("content") or ""
+                if piece:
+                    content.append(piece)
+                    on_delta(piece)
+                if msg.get("tool_calls"):
+                    tool_calls.extend(msg["tool_calls"])
+                if chunk.get("done"):
+                    LAST_USAGE.update(
+                        prompt_tokens=chunk.get("prompt_eval_count", 0),
+                        completion_tokens=chunk.get("eval_count", 0),
+                        num_ctx=NUM_CTX)
+    except ji.Interrupted:
+        return {"role": role, "content": "".join(content), "interrupted": True}
 
     out = {"role": role, "content": "".join(content)}
     if tool_calls:
@@ -625,7 +623,9 @@ def execute_tool(call, seen, hop, user_message, should_stop=None):
     else:
         try:
             extra = {"should_stop": should_stop} if should_stop and name in STOPPABLE else {}
-            result = fn(**args, **extra)
+            result = ji.run_stoppable(fn, **args, **extra)
+        except ji.Interrupted:
+            result = {"error": "stopped — Riadh pressed esc"}
         except TypeError as e:
             # A 4B model gets argument names wrong often enough that an
             # uncaught TypeError killing the whole turn is the common
@@ -712,7 +712,19 @@ LAST_LEARNED = []
 
 def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
              should_stop=None):
-    """Answer one user turn. Dispatches to the configured engine."""
+    """Answer one user turn. Dispatches to the configured engine.
+
+    Everything the turn does in this thread — model calls, decide checks,
+    tools, the answer check — is stoppable by `should_stop` (esc)."""
+    with ji.stoppable(should_stop):
+        try:
+            return _run_turn(messages, max_hops, on_tool, on_delta,
+                             should_stop or ji.stop_requested)
+        except ji.Interrupted:
+            return "(interrupted)"
+
+
+def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
     import johan_steps
     LAST_LEARNED[:] = []
     if ENGINE == "steps":
@@ -731,7 +743,9 @@ def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
                            on_delta=on_delta, should_stop=should_stop)
     if _plan.ended_by_ask(messages, start):
         return answer          # a question to him, not facts to verify
-    if answer and not answer.startswith("(interrupted"):
+    # Small talk ending "code or game?" is conversation, not an ambiguous
+    # request — re-asking it as options turned "good morning" into a menu.
+    if answer and not answer.startswith("(interrupted") and not _is_trivial(q):
         seen = {}
         asked = _plan.reask_as_tool(
             messages, q, answer, call_model=call_model, on_tool=on_tool,

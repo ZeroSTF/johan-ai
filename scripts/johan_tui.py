@@ -63,6 +63,7 @@ import johan_actions as jx        # noqa: E402
 import johan_commands as jc       # noqa: E402
 import apply_queue as aq          # noqa: E402
 import johan_plan as jp           # noqa: E402
+import johan_interrupt as ji      # noqa: E402
 from johan_widgets import Choices, PlanCard  # noqa: E402
 
 try:                               # real pictures in WezTerm/kitty/sixel terminals
@@ -1741,6 +1742,9 @@ class JohanApp(App):
 
     @work(thread=True)
     def ask_worker(self, plan_check=False, replan=None):
+        # Everything this worker thread waits on — the plan check, model
+        # calls, tools — now gives way to esc within ~0.1 s.
+        ji.set_stop(self.cancel.is_set)
         turn = self.turn
         self._asked = None
         q = ja._last_user_message(self.messages)

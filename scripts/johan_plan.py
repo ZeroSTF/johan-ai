@@ -336,13 +336,14 @@ def _plan_call(messages, cfg):
     keep_alive as call_model, so the conversation's cached prefix is reused;
     `format` turns tool calling off and forces the plan schema."""
     names = [t["function"]["name"] for t in cfg.TOOLS]
-    r = requests.post(cfg.OLLAMA_CHAT, timeout=120, json={
+    import johan_interrupt as ji     # esc stops it mid-wait
+    body = ji.ollama_post(cfg.OLLAMA_CHAT, {
         "model": cfg.MODEL, "messages": messages, "tools": cfg.TOOLS,
-        "format": plan_schema(names), "think": False, "stream": False,
+        "format": plan_schema(names), "think": False,
         "keep_alive": cfg.KEEP_ALIVE,
-        "options": {"temperature": 0, "num_ctx": cfg.NUM_CTX, "num_predict": 400}})
-    r.raise_for_status()
-    return (r.json().get("message") or {}).get("content") or ""
+        "options": {"temperature": 0, "num_ctx": cfg.NUM_CTX, "num_predict": 400}},
+        timeout=120)
+    return (body.get("message") or {}).get("content") or ""
 
 
 def make_plan(messages, changes=None, cfg=None, call=None):

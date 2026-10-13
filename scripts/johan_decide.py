@@ -175,7 +175,8 @@ def _score_once(question, items, context, system):
     prompt = ((context.strip() + "\n\n") if context else "") + \
         f"{question.strip()}\n\nOptions:\n" + "\n".join(lines) + \
         "\n\nAnswer with one letter."
-    r = requests.post(cfg.OLLAMA_CHAT, json={
+    import johan_interrupt as ji     # esc stops it mid-wait (see that module)
+    body = ji.ollama_post(cfg.OLLAMA_CHAT, {
         "model": cfg.MODEL, "stream": False, "think": False,
         # Same num_ctx and keep_alive as the chat: anything else reloads the
         # model (measured 8-12 s) and evicts the conversation's KV cache.
@@ -185,8 +186,6 @@ def _score_once(question, items, context, system):
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": prompt}],
     }, timeout=120)
-    r.raise_for_status()
-    body = r.json()
     top = (body.get("logprobs") or [{}])[0].get("top_logprobs", [])
     mass = [0.0] * len(items)
     for t in top:
