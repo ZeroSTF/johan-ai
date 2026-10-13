@@ -83,6 +83,10 @@ Rules:
   of guessing details.
 - General knowledge you're sure of (concepts, how things work): answer
   directly, with NO tool call.
+- A request missing what you need to act (which file, what to change it
+  to, which app)? Your first call is `ask` with 2-4 short options — don't
+  look around first, and never list options in your text. If one reading
+  is likely, just do it.
 - Jobs to apply to → build_apply_queue; give company, title, APPLY LINK and CV
   PDF PATH for each, and pass on every warning. Nothing is ever sent or
   submitted by you — applying is his step.
@@ -404,6 +408,9 @@ TOOLS = TOOLS + [_research.TOOL, _autofill.TOOL, _images.TOOL]
 DISPATCH["generate_image"] = _images.generate_image
 DISPATCH["deep_research"] = _research.deep_research
 DISPATCH["autofill_application"] = _autofill.autofill_application
+import johan_plan as _plan  # noqa: E402  (ask-with-options; ends the turn)
+TOOLS = TOOLS + [_plan.ASK_TOOL]
+DISPATCH["ask"] = _plan.ask
 
 
 # --------------------------------------------------------------------------
@@ -705,6 +712,16 @@ def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
         return report
     answer = run_turn_loop(messages, max_hops=max_hops, on_tool=on_tool,
                            on_delta=on_delta, should_stop=should_stop)
+    if _plan.ended_by_ask(messages, start):
+        return answer          # a question to him, not facts to verify
+    if answer and not answer.startswith("(interrupted"):
+        seen = {}
+        asked = _plan.reask_as_tool(
+            messages, q, answer, call_model=call_model, on_tool=on_tool,
+            should_stop=should_stop,
+            execute=lambda c: execute_tool(c, seen, 0, q, should_stop))
+        if asked:
+            return _plan.render_ask(asked)
     if VERIFY_ANSWERS and answer and not answer.startswith("(interrupted"):
         answer = johan_steps._verify_and_fix(messages, start, answer, should_stop)
     return answer
@@ -750,11 +767,19 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
         calls = msg.get("tool_calls") or []
         if not calls:
             return msg.get("content", "")
+        done = []
         for call in calls:
             name, args, result, payload = execute_tool(call, seen, hop, user_message,
                                                        should_stop)
             messages.append({"role": "tool", "content": payload})
             notify_tool(on_tool, name, args, result)
+            done.append((name, result))
+        asked = _plan.ask_result_of(done)
+        if asked:
+            # `ask` ends the turn: his pick arrives as the next user message.
+            text = _plan.render_ask(asked)
+            messages.append({"role": "assistant", "content": text})
+            return text
     return ("(no answer — the model kept calling tools and never summarised. "
             "This should be unreachable: the final hop disables tools.)")
 
