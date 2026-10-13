@@ -37,7 +37,7 @@ from pathlib import Path
 import requests
 
 ROOT = Path.home() / "johan"
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import johan_assistant as ja      # noqa: E402
 import johan_tools as jt          # noqa: E402
 import apply_queue as aq          # noqa: E402

@@ -45,7 +45,7 @@ import requests
 import yaml
 
 ROOT = Path.home() / "johan"
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import stage4_assemble as s4          # noqa: E402
 import stage5_verify as s5            # noqa: E402
 import apply_queue as aq              # noqa: E402
