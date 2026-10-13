@@ -69,7 +69,7 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 SLASH = ["/draw ", "/draw real ", "/draw landscape ", "/draw square ", "/research ", "/review",
          "/refresh",
-         "/retry", "/copy", "/new", "/history", "/jobs", "/images", "/edits", "/rules",
+         "/retry", "/rewind", "/copy", "/new", "/history", "/jobs", "/images", "/edits", "/rules",
          "/help", "/theme"]
 
 # What each tool is DOING, in words — "searching the web" reads better than
@@ -569,6 +569,9 @@ HELP_MD = """\
   In Images (F5), `i` starts a redraw of the selected one
 - `/research <question>` — deep research, a few minutes, with sources
 - `/retry` — ask the last question again · `/copy` — copy the last answer
+- `/rewind` or `ctrl+z` — take back the last turn: drops it, reverts the changes and edits it
+  made (one confirmation listing exactly what, and what can't be undone), and puts your
+  question back in the box to edit
 - `/review` — Johan reviews its own mistakes; proposals go to Edits (F4)
 - `/refresh` — fetch new job postings, drop closed ones, rebuild the queue
   (~20 min in the background; `/refresh` again shows progress; `R` in Jobs)
@@ -604,6 +607,62 @@ class HelpScreen(ModalScreen):
 
     def on_mount(self):
         self.query_one("#helpbox").border_title = "help"
+
+
+class RewindScreen(ModalScreen):
+    """One confirmation for a rewind that touches the machine or files:
+    exactly what will be reverted, discarded, and what can't be undone."""
+
+    DEFAULT_CSS = """
+    RewindScreen { align: center middle; }
+    #rwbox { width: 90; max-width: 95%; height: auto; max-height: 80%;
+             background: $surface; border: round $warning; padding: 1 2; }
+    """
+    BINDINGS = [Binding("y", "go", "rewind"), Binding("enter", "go", "rewind"),
+                Binding("n", "stop", "cancel"), Binding("escape", "stop", "cancel")]
+
+    def __init__(self, plan):
+        super().__init__()
+        self.plan = plan
+
+    def compose(self) -> ComposeResult:
+        m = lambda t: Text(str(t)).markup
+        out = ["[b]Rewind the last turn[/b] — the question goes back in the box.", ""]
+        for key, head, style in (("revert", "Will be reverted:", "$success"),
+                                 ("discard", "Waiting, will be discarded:", "$text-muted"),
+                                 ("cannot", "Can't be undone (stays as it is):", "$error")):
+            if self.plan.get(key):
+                out.append(f"[{style}]{head}[/]")
+                out += [f"  • {m(x)}" for x in self.plan[key]]
+                out.append("")
+        out.append("[$text-muted]y / enter rewind · n / esc cancel[/]")
+        with VerticalScroll(id="rwbox"):
+            yield Static("\n".join(out))
+
+    def action_go(self):
+        self.dismiss(True)
+
+    def action_stop(self):
+        self.dismiss(False)
+
+
+# What a turn's tool calls may have written that rewind does NOT revert —
+# said up front rather than silently left behind.
+def _side_effects(calls):
+    out = []
+    for name, args in calls:
+        a = args or {}
+        if name == "memory" and (a.get("text") or a.get("forget_id")):
+            out.append("a memory saved/forgotten (say “forget …” to fix it)")
+        elif name == "tasks" and a.get("action") in ("add", "done"):
+            out.append(f"task {a.get('action')}: {str(a.get('text') or a.get('task_id') or '')[:50]}")
+        elif name == "applied" and a.get("job_id"):
+            out.append(f"job {a.get('job_id')} marked applied (a in Jobs toggles it)")
+        elif name == "scratchpad" and (a.get("text") or a.get("clear")):
+            out.append("the scratchpad note")
+        elif name == "generate_image":
+            out.append("the image drawn (F5 → x deletes it)")
+    return list(dict.fromkeys(out))
 
 
 # ================================================================ jobs
@@ -806,7 +865,7 @@ class EditsPane(Vertical):
     runs on its own; `y` is the only trigger."""
 
     BINDINGS = [Binding("y", "app.apply_edit", "run / apply"),
-                Binding("Y", "app.allow_change", "run + always allow"),
+                Binding("Y,shift+y", "app.allow_change", "run + always allow"),
                 Binding("n", "app.discard_edit", "discard"),
                 Binding("u", "app.undo_change", "undo last change")]
 
@@ -932,6 +991,7 @@ class JohanCommands(Provider):
         ("Refresh job postings", "refresh_jobs", "fetch new jobs, drop closed ones (~20 min)"),
         ("Rebuild the job queue", "rebuild_any", "rank jobs and write CVs"),
         ("Retry last question", "retry", "ask the last question again"),
+        ("Rewind last turn", "rewind", "ctrl+z: drop it, revert what it changed, edit the question"),
         ("Copy last answer", "copy_last", "to the clipboard"),
         ("Open newest link / file", "open_last", "posting, PDF or image"),
         ("Toggle sidebar", "toggle_sidebar", "more room for the chat"),
@@ -1030,6 +1090,7 @@ class JohanApp(App):
         Binding("ctrl+b", "toggle_sidebar", "sidebar", show=False),
         Binding("ctrl+r", "refresh", "refresh", show=False),
         Binding("ctrl+t", "cycle_theme", "theme", show=False),
+        Binding("ctrl+z", "rewind", "rewind", show=False),
     ]
 
     URL_RE = re.compile(r"https?://[^\s`\)\]<>\"']+")
@@ -1052,6 +1113,8 @@ class JohanApp(App):
         self._stream_last = 0.0
         self._spin = 0
         self._ticker = None
+        self.turn_ids = {}       # index of the user message → jx turn id (for rewind)
+        self.turn_tools = {}     # turn id → [(tool, args)] it called
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -1284,6 +1347,7 @@ class JohanApp(App):
             "/help": self.action_help_me, "/review": self.action_review,
             "/retry": self.action_retry, "/copy": self.action_copy_last,
             "/theme": self.action_cycle_theme, "/refresh": self.action_refresh_jobs,
+            "/rewind": self.action_rewind, "/undo": self.action_rewind,
         }
         if cmd in handlers:
             return handlers[cmd]()
@@ -1319,6 +1383,9 @@ class JohanApp(App):
         self.query_one("#main", TabbedContent).active = "tab-chat"
         self._drop_welcome()
         self._chat().add(UserMsg(text))
+        tid = jx.new_turn()
+        self.turn_ids[len(self.messages)] = tid
+        self.turn_tools[tid] = []
         self.messages.append({"role": "user", "content": text})
         self.cancel.clear()
         self.turn = self._chat().add(Turn())
@@ -1329,7 +1396,10 @@ class JohanApp(App):
     def ask_worker(self):
         turn = self.turn
 
+        tid = jx.TURN
+
         def on_tool(name, args, result):
+            self.turn_tools.setdefault(tid, []).append((name, args))
             self.call_from_thread(turn.add_step, name, args, result)
             self.call_from_thread(setattr, self, "busy_label", VERBS.get(name, name))
             if name == "generate_image" and isinstance(result, dict) and result.get("path"):
@@ -1369,6 +1439,7 @@ class JohanApp(App):
         self.query_one(ImagesPane).load()
 
     def _finish(self):
+        jx.end_turn()
         self._stop_busy()
         self._chat().scroll_end(animate=False)
         self._refresh_sidebar()
@@ -1518,6 +1589,77 @@ class JohanApp(App):
         self.messages = self.messages[:idx]
         self._ask(last)
 
+    def _last_user_idx(self):
+        return next((i for i in range(len(self.messages or []) - 1, 0, -1)
+                     if self.messages[i].get("role") == "user"
+                     and not str(self.messages[i].get("content", "")).startswith("[")), None)
+
+    def action_rewind(self):
+        """ctrl+z: take back the last turn — the question and answer, and
+        what it changed on disk — and put the question back to edit."""
+        if self.busy:
+            return self._toast("still working — esc first")
+        idx = self._last_user_idx()
+        if idx is None:
+            return self._toast("nothing to rewind")
+        tid = self.turn_ids.get(idx)
+        plan = jx.rewind_plan(tid)
+        plan["cannot"] += _side_effects(self.turn_tools.get(tid, []))
+        if not any(plan.values()):
+            return self._rewind_chat(idx)          # nothing changed: instant
+        self.push_screen(RewindScreen(plan),
+                         lambda ok: ok and self._rewind_changes(idx, tid, plan))
+
+    def _rewind_changes(self, idx, tid, plan):
+        if not plan["revert"] and not plan["discard"]:
+            return self._rewind_chat(idx)
+        self._rewinding = True
+        self._start_busy("rewinding" + (" — enter your password in the system dialog"
+                                        if "password" in " ".join(plan["revert"]) else ""))
+        self.rewind_worker(idx, tid)
+
+    @work(thread=True)
+    def rewind_worker(self, idx, tid):
+        try:
+            res = jx.rewind_apply(tid)
+        except Exception as e:
+            res = {"reverted": [], "discarded": [], "failed": [f"{type(e).__name__}: {e}"]}
+        self.call_from_thread(self._rewind_done, idx, res)
+
+    def _rewind_done(self, idx, res):
+        self._rewinding = False
+        self._stop_busy()
+        self._rewind_chat(idx)
+        if res["failed"]:
+            self._toast("; ".join(res["failed"])[:300], "rewind: not everything reverted", True)
+        else:
+            self._toast(f"reverted {len(res['reverted'])}, discarded {len(res['discarded'])}",
+                        "rewound")
+
+    def _rewind_chat(self, idx):
+        text = str(self.messages[idx].get("content", ""))
+        if text.startswith("draw: "):
+            text = "/draw " + text[6:]
+        self.messages = self.messages[:idx]
+        self.turn_ids = {k: v for k, v in self.turn_ids.items() if k < idx}
+        if len(self.messages) > 1:
+            self._replay(self.messages)
+        else:
+            self._fresh()
+        self.query_one("#main", TabbedContent).active = "tab-chat"
+        box = self.query_one("#prompt", Input)
+        box.value, box.cursor_position = text, len(text)
+        box.focus()
+        try:
+            self.query_one(EditsPane).load()
+        except Exception:
+            pass
+        self._refresh_sidebar()
+        try:
+            ja.save_session(self.messages)
+        except Exception:
+            pass
+
     def action_copy_last(self):
         text = self._last_answer()
         if not text:
@@ -1550,7 +1692,7 @@ class JohanApp(App):
     def action_interrupt(self):
         """Esc stops generation mid-sentence, so a misread question costs
         seconds, not the whole answer."""
-        if not self.busy:
+        if not self.busy or getattr(self, "_rewinding", False):
             return
         self.cancel.set()
         self.busy_label = "stopping"

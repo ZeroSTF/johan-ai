@@ -51,6 +51,9 @@ def main():
     real_pending, real_log, real_rules = jx.PENDING, jx.LOG, jx.ALLOW_RULES
     jx.PENDING, jx.LOG = tmp / "pending.json", tmp / "log.json"
     jx.ALLOW_RULES = tmp / "rules.json"
+    real_edits = (jx.EDITS_LOG, jt.PENDING_EDITS, jt.EDIT_BACKUPS)
+    jx.EDITS_LOG, jt.PENDING_EDITS, jt.EDIT_BACKUPS = (
+        tmp / "edits-log.json", tmp / "pending-edits.json", tmp / "edit-backups")
     scratch = Path.home() / ".cache/johan-actions-test"
     shutil.rmtree(scratch, ignore_errors=True)
     scratch.mkdir(parents=True)
@@ -230,6 +233,63 @@ def main():
                                                 "org.gnome.desktop.interface color-scheme"))
         jx.ALLOW_RULES.unlink()
 
+        # ---------------------------------------------------- rewind
+        repo = scratch / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        code = repo / "a.py"
+        code.write_text("X = 1\nY = 2\n")
+        g = scratch / "g.txt"
+        g.write_text("x")
+        os.chmod(g, 0o644)
+        tid = jx.new_turn()
+        r1 = jx.propose_action(f"mkdir {scratch}/rw", why="t")
+        r2 = jx.propose_action(f"chmod 600 {g}", why="t")
+        e1 = jt.propose_edit(str(code), "X = 1", "X = 10", why="t")
+        r3 = jx.propose_action(f"mkdir {scratch}/never", why="t")    # left waiting
+        jx.end_turn()
+        jx.run_action(r1["action_id"])
+        jx.run_action(r2["action_id"])                               # approved after the turn
+        jt.apply_edit(e1["edit_id"])
+        log = jx._load(jx.LOG, [])
+        log.append({"id": 900, "why": "close firefox", "turn": tid, "ok": True, "undo": [],
+                    "no_undo": ["close 1 process named firefox"]})
+        jx._save(jx.LOG, log)
+        r4 = jx.propose_action(f"mkdir {scratch}/other", why="another turn")
+        plan = jx.rewind_plan(tid)
+        results["rewind plan: what reverts, what's discarded, what can't"] = (
+            len(plan["revert"]) == 3 and any("rmdir" in x for x in plan["revert"])
+            and any("chmod 644" in x for x in plan["revert"])
+            and any("edit e" in x for x in plan["revert"])
+            and len(plan["discard"]) == 1 and f"a{r3['action_id']}" in plan["discard"][0]
+            and plan["cannot"] == ["change #900 (close firefox): close 1 process named "
+                                   "firefox — no automatic undo"])
+        results["…changes approved later still belong to their turn; others don't"] = (
+            not any(f"a{r4['action_id']}" in x for x in plan["discard"]))
+        res = jx.rewind_apply(tid)
+        results["rewind reverts changes and edits of that turn"] = (
+            not res["failed"] and len(res["reverted"]) == 3
+            and not (scratch / "rw").exists()
+            and stat.S_IMODE(g.stat().st_mode) == 0o644
+            and code.read_text() == "X = 1\nY = 2\n")
+        results["…discards what was still waiting, keeps other turns' changes"] = (
+            [a["id"] for a in jx.list_actions()] == [r4["action_id"]])
+        p2 = jx.rewind_plan(tid)
+        results["…and a second rewind finds nothing left to revert"] = (
+            not p2["revert"] and not p2["discard"])
+        results["no turn → nothing to confirm"] = jx.rewind_plan(None) == {
+            "revert": [], "discard": [], "cannot": []}
+        jx.discard_action(r4["action_id"])
+        # Edited, then the file moved on: put back surgically, keep the rest.
+        tid = jx.new_turn()
+        e2 = jt.propose_edit(str(code), "Y = 2", "Y = 20", why="t")
+        jx.end_turn()
+        jt.apply_edit(e2["edit_id"])
+        code.write_text(code.read_text() + "Z = 3\n")
+        res = jx.rewind_apply(tid)
+        results["an edit is reverted even after the file changed elsewhere"] = (
+            not res["failed"] and code.read_text() == "X = 1\nY = 2\nZ = 3\n")
+
         # ---------------------------------------------------- check after doing
         # rc 0 but nothing happened: the step must fail verification.
         real_exec = jx._exec
@@ -292,6 +352,8 @@ def main():
     finally:
         jx.PENDING, jx.LOG, jx.ALLOW_RULES = real_pending, real_log, real_rules
         jx.AUTO_ALLOW = True
+        jx.EDITS_LOG, jt.PENDING_EDITS, jt.EDIT_BACKUPS = real_edits
+        jx.end_turn()
         shutil.rmtree(scratch, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)
 

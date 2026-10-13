@@ -59,6 +59,10 @@ LOG = ROOT / "brain/actions-log.json"
 LOG_KEEP = 60
 ALLOW_RULES = ROOT / "brain/allow-rules.json"
 AUTO_ALLOW = True        # the eval harness turns this off: a test must never change his machine
+EDITS_LOG = ROOT / "brain/edits-log.json"
+# Which chat turn is running, so every change and edit it proposes can be
+# found again by rewind. Set by the UI around a turn; None otherwise.
+TURN = None
 HOME = Path.home().resolve()
 MAX_STEPS = 6
 
@@ -688,7 +692,7 @@ def propose_action(commands=None, why="", undo_last=False, _undo_of=None):
     action = {"id": aid, "why": (why or "").strip()[:300],
               "created": datetime.now().isoformat(timespec="seconds"),
               "steps": steps, "root": any(s["root"] for s in steps),
-              "undo_of": _undo_of}
+              "undo_of": _undo_of, "turn": TURN}
     pending.append(action)
     _save(PENDING, pending)
     # An always-allow rule covers every step: run it now, through exactly
@@ -1115,6 +1119,140 @@ def remove_rule(n):
     gone = rules.pop(int(n) - 1)
     _save(ALLOW_RULES, rules)
     return {"removed": rule_text(gone)}
+
+
+# ------------------------------------------------------------------ rewind
+#
+# Undo the last chat turn: the conversation AND what it changed. Every
+# change/edit records the turn that proposed it (TURN), so a change approved
+# with `y` minutes later still belongs to the turn that asked for it.
+# Changes are reverted by running their recorded undo through the same
+# propose → run_action path (re-validated, checked, logged); edits by putting
+# the old text back. What has no undo (apt upgrade, a closed app, a trashed
+# file) is listed up front, never silently skipped.
+
+def new_turn():
+    global TURN
+    TURN = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    return TURN
+
+
+def end_turn():
+    global TURN
+    TURN = None
+
+
+def note_edit_applied(edit, target, backup, after):
+    """Called by johan_tools.apply_edit, so an applied edit can be rewound."""
+    import hashlib
+    log = _load(EDITS_LOG, [])
+    log.append({"id": edit["id"], "path": edit["path"], "abs_path": str(target),
+                "backup": str(backup), "old_string": edit["old_string"],
+                "new_string": edit["new_string"], "turn": edit.get("turn"),
+                "after_sha": hashlib.sha256(after.encode()).hexdigest(),
+                "applied": datetime.now().isoformat(timespec="seconds")})
+    _save(EDITS_LOG, log[-LOG_KEEP:])
+
+
+def _turn_items(turn):
+    log = [e for e in _load(LOG, []) if turn and e.get("turn") == turn]
+    edits = [e for e in _load(EDITS_LOG, []) if turn and e.get("turn") == turn]
+    return {
+        "actions": [e for e in log if not e.get("undo_of") and not e.get("undone")],
+        "redone": [e for e in log if e.get("undo_of")],
+        "edits": [e for e in edits if not e.get("reverted")],
+        "pending": [a for a in list_actions() if turn and a.get("turn") == turn],
+        "pending_edits": [e for e in _jt()._load_edits() if turn and e.get("turn") == turn],
+    }
+
+
+def rewind_plan(turn):
+    """What rewinding `turn` will revert, discard, and can't undo — shown to
+    him before anything happens. All three empty → nothing to confirm."""
+    it = _turn_items(turn)
+    plan = {"revert": [], "discard": [], "cannot": []}
+    for e in reversed(it["actions"]):
+        label = f"change #{e['id']}" + (f" ({e['why'][:60]})" if e.get("why") else "")
+        if e.get("undo"):
+            root = any(Path(u.split()[0]).name in ("apt", "apt-get") or
+                       (u.startswith("systemctl ") and "--user" not in u) for u in e["undo"])
+            plan["revert"].append(f"{label}: {' && '.join(e['undo'])}"
+                                  + (" (asks for your password)" if root else ""))
+        for n in e.get("no_undo") or ([] if e.get("undo") or not e.get("ok") else ["its steps"]):
+            plan["cannot"].append(f"{label}: {n} — no automatic undo")
+    for e in it["redone"]:
+        plan["cannot"].append(f"change #{e['id']} was an undo of #{e['undo_of']} — not re-done")
+    for e in reversed(it["edits"]):
+        plan["revert"].append(f"edit e{e['id']}: put {e['path']} back as it was")
+    for a in it["pending"]:
+        plan["discard"].append(f"waiting change a{a['id']}: "
+                               + "; ".join(s["what"] for s in a["steps"])[:80])
+    for e in it["pending_edits"]:
+        plan["discard"].append(f"waiting edit e{e['id']} to {e['path']}")
+    return plan
+
+
+def _revert_edit(e):
+    import hashlib
+    try:
+        target, _ = _jt()._edit_path(e["abs_path"])
+    except ValueError as err:
+        return f"{e['path']}: {err}"
+    cur = target.read_text()
+    new, old = e["new_string"], e["old_string"]
+    before = None
+    if hashlib.sha256(cur.encode()).hexdigest() == e["after_sha"]:
+        try:
+            before = Path(e["backup"]).read_text()        # exactly what it was
+        except OSError:
+            pass
+    if before is None and new and cur.count(new) == 1:
+        before = cur.replace(new, old, 1)                 # file moved on since: surgical
+    if before is None:
+        return f"{e['path']} changed since — restore it by hand from {e['backup']}"
+    target.write_text(before)
+    return None
+
+
+def rewind_apply(turn):
+    """Revert everything `turn` changed (after he confirmed rewind_plan).
+    Returns what was reverted, what failed, what was discarded."""
+    it = _turn_items(turn)
+    out = {"reverted": [], "failed": [], "discarded": []}
+    for a in it["pending"]:
+        discard_action(a["id"])
+        out["discarded"].append(f"change a{a['id']}")
+    for e in it["pending_edits"]:
+        _jt().discard_edit(e["id"])
+        out["discarded"].append(f"edit e{e['id']}")
+    for e in reversed(it["actions"]):
+        if not e.get("undo"):
+            continue
+        res = propose_action(" && ".join(e["undo"]), why=f"rewind: undo change #{e['id']}",
+                             _undo_of=e["id"])
+        if not res.get("proposed"):
+            out["failed"].append(f"change #{e['id']}: undo can't run now — {res.get('error')}")
+            continue
+        full = _load(LOG, [])
+        for x in full:
+            if x["id"] == e["id"]:
+                x["undone"] = res["action_id"]
+        _save(LOG, full)
+        run = run_action(res["action_id"])
+        (out["reverted"] if run.get("ok") else out["failed"]).append(
+            f"change #{e['id']}" + ("" if run.get("ok") else f": {run.get('error')}"))
+    log = _load(EDITS_LOG, [])
+    for e in reversed(it["edits"]):
+        err = _revert_edit(e)
+        if err:
+            out["failed"].append(f"edit e{e['id']}: {err}")
+            continue
+        for x in log:
+            if x["id"] == e["id"] and x.get("applied") == e.get("applied"):
+                x["reverted"] = datetime.now().isoformat(timespec="seconds")
+        out["reverted"].append(f"edit e{e['id']} ({e['path']})")
+    _save(EDITS_LOG, log)
+    return out
 
 
 TOOL = {"type": "function", "function": {
