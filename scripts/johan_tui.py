@@ -30,6 +30,7 @@ Design notes worth keeping (each one cost real time once):
     johan --continue  reopen the last conversation
 """
 
+import dataclasses
 import re
 import shutil
 import subprocess
@@ -42,13 +43,15 @@ from pathlib import Path
 from rich.text import Text
 
 from textual import work
+from textual.color import Color
+from textual.theme import Theme
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.suggester import SuggestFromList
-from textual.widgets import (Button, Collapsible, DataTable, Footer, Header, Input,
+from textual.widgets import (Button, Collapsible, DataTable, Footer, Input,
                              Label, ListItem, ListView, Markdown, Static,
                              TabbedContent, TabPane)
 
@@ -64,8 +67,42 @@ except Exception:                  # noqa: BLE001
     TermImage = None
 
 ROOT = Path.home() / "johan"
-THEMES = ["tokyo-night", "catppuccin-mocha", "nord", "gruvbox", "textual-light"]
+THEMES = ["johan", "tokyo-night", "catppuccin-mocha", "nord", "gruvbox", "textual-light"]
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+# The default look: a calm near-black that sits well on WezTerm's dark
+# background, warm grey text, and ONE accent (clay) for what should catch
+# the eye — the prompt caret, the active tab, Johan's bullet.
+JOHAN_THEME = Theme(
+    name="johan", dark=True,
+    primary="#D7825E", secondary="#8FA8D8", accent="#D7825E",
+    warning="#D8B272", error="#E07A7A", success="#8DBF7A",
+    foreground="#CDD0D8", background="#131419", surface="#1A1C23", panel="#2A2D37",
+    variables={"footer-key-foreground": "#D7825E", "input-cursor-background": "#D7825E",
+               "border": "#3A3E4A", "border-blurred": "#2A2D37"},
+)
+
+
+# DataTable cells are Rich Text, so theme variables can't reach them; these
+# match the johan theme instead of terminal-bright red/green/cyan.
+SOFT = {"red": "#E07A7A", "yellow": "#D8B272", "green": "#8DBF7A", "blue": "#8FA8D8"}
+
+
+def _fixed_muted(theme):
+    """`$text-muted` is "auto 60%", which inside content markup resolves
+    against no background and came out BRIGHT WHITE — every "muted" hint,
+    meta line and footnote was as loud as the answer. Pin it (and
+    text-disabled) to real blended colours, per theme."""
+    try:
+        bg = Color.parse(theme.background or ("#000000" if theme.dark else "#ffffff"))
+        fg = Color.parse(theme.foreground or ("#ffffff" if theme.dark else "#000000"))
+    except Exception:
+        return theme
+    return dataclasses.replace(theme, variables={
+        **(theme.variables or {}),
+        "text-muted": bg.blend(fg, 0.55).hex, "text-disabled": bg.blend(fg, 0.36).hex})
+
+PROMPT_HINT = "ask Johan anything  ·  / for commands"
 
 SLASH = ["/draw ", "/draw real ", "/draw landscape ", "/draw square ", "/research ", "/review",
          "/refresh",
@@ -125,6 +162,11 @@ def _hm():
     return datetime.now().strftime("%H:%M")
 
 
+def _clip(text, n):
+    text = str(text or "")
+    return text if len(text) <= n else text[:max(1, n - 1)].rstrip() + "…"
+
+
 # ================================================================ sidebar
 
 class Panel(Static):
@@ -135,10 +177,20 @@ class Panel(Static):
 
 class Sidebar(Vertical):
     def compose(self) -> ComposeResult:
+        yield Static("", id="brand")
         yield Panel("this chat", id="p-chat", classes="panel")
         yield Panel("jobs", id="p-jobs", classes="panel")
         yield Panel("tasks", id="p-tasks", classes="panel")
         yield Panel("machine", id="p-machine", classes="panel")
+
+    def on_mount(self):
+        self._clock()
+        self.set_interval(20, self._clock)
+
+    def _clock(self):
+        """The header used to spend a whole row on a title and a clock."""
+        self.query_one("#brand", Static).update(
+            f"[b $accent]✻ johan[/]  [$text-muted]{datetime.now():%a %d %b · %H:%M}[/]")
 
     def refresh_state(self, messages=None):
         self.messages = messages if messages is not None else getattr(self, "messages", None)
@@ -166,9 +218,16 @@ class Sidebar(Vertical):
                 pass
 
     @staticmethod
-    def _bar(frac, colour, width=22):
+    def _bar(frac, colour, width=24):
         filled = max(0, min(width, round(width * frac)))
-        return f"[{colour}]{'█' * filled}[/][$panel]{'░' * (width - filled)}[/]"
+        return f"[{colour}]{'━' * filled}[/][$panel]{'━' * (width - filled)}[/]"
+
+    @staticmethod
+    def _row(label, value):
+        """`label ........ value` on one line, so the panel reads as a list."""
+        plain = lambda s: re.sub(r"\[[^\]]*\]", "", s)       # noqa: E731
+        gap = max(1, 24 - len(plain(label)) - len(plain(value)))
+        return f"{label}{' ' * gap}{value}"
 
     def _chat(self):
         # Overflow fails silently — old messages fall out and the assistant
@@ -179,8 +238,8 @@ class Sidebar(Vertical):
         colour = "$success" if pct < 60 else ("$warning" if pct < 85 else "$error")
         turns = sum(1 for m in (self.messages or []) if m.get("role") == "user")
         out = [self._bar(used / ctx, colour),
-               f"[{colour}]{used:,}[/] / {ctx:,} tokens ({pct}%)",
-               f"{turns} message{'s' if turns != 1 else ''}"]
+               self._row("[$text-muted]context[/]", f"[{colour}]{pct}%[/] [$text-muted]of {ctx // 1024}k[/]"),
+               self._row("[$text-muted]messages[/]", str(turns))]
         if pct >= 60:
             out.append("[$warning]ctrl+n starts fresh[/]")
         return "\n".join(out)
@@ -190,24 +249,25 @@ class Sidebar(Vertical):
         v = stats.get("by_verdict", {})
         applied = len(ja.applied_ids())
         q = aq.latest_queue()
-        out = [f"[$success]{v.get('likely', 0)}[/] likely  "
-               f"[$warning]{v.get('unclear', 0)}[/] unclear",
-               f"{stats.get('cvs_ready', 0)} CVs ready",
-               f"[$success]{applied} applied[/]" if applied
-               else "[$text-muted]none applied yet[/]"]
+        out = [self._row("[$text-muted]likely[/]", f"[$success]{v.get('likely', 0)}[/]"),
+               self._row("[$text-muted]unclear[/]", f"[$warning]{v.get('unclear', 0)}[/]"),
+               self._row("[$text-muted]CVs ready[/]", str(stats.get("cvs_ready", 0))),
+               self._row("[$text-muted]applied[/]", f"[$success]{applied}[/]" if applied else "0")]
         age = _queue_age_days(q) if q else None
         if age is not None:
-            out.append(f"[$warning]queue {age} days old[/]" if age >= 7
-                       else f"[$text-muted]queue {age}d old[/]")
+            out.append(self._row("[$text-muted]queue built[/]",
+                                 f"[$warning]{age}d ago[/]" if age >= 7 else f"{age}d ago"))
         return "\n".join(out)
 
     def _tasks(self):
         t = jt.list_tasks()
         if not t["tasks"]:
             return "[$text-muted]nothing open[/]"
-        rows = [f"· {r['text'][:26]}" for r in t["tasks"][:5]]
+        # One line each, cut with an ellipsis: a wrapped task used to spill
+        # "contra" onto a line of its own.
+        rows = [f"[$text-muted]○[/] {Text(_clip(r['text'], 22)).markup}" for r in t["tasks"][:5]]
         if t["count"] > 5:
-            rows.append(f"[$text-muted]+{t['count'] - 5} more[/]")
+            rows.append(f"[$text-muted]  +{t['count'] - 5} more[/]")
         return "\n".join(rows)
 
     def _machine(self):
@@ -218,25 +278,30 @@ class Sidebar(Vertical):
             total, used = gpu["vram_total_mb"], gpu["vram_used_mb"]
             frac = used / max(total, 1)
             out += [self._bar(frac, "$success" if frac < 0.85 else "$warning"),
-                    f"VRAM {used:,} / {total:,} MB"]
+                    self._row("[$text-muted]VRAM[/]", f"{used / 1024:.1f} / {total / 1024:.1f} GB")]
         loaded = s.get("models_loaded")
-        out.append(f"model {loaded[0] if isinstance(loaded, list) and loaded else '[$text-muted]unloaded[/]'}")
-        dots = []
-        for name, short in (("postgres", "db"), ("qdrant", "vec"), ("embed_server", "emb")):
-            dots.append(f"[{'$success' if s.get(name) == 'up' else '$error'}]●[/]{short}")
-        dots.append(f"[{'$success' if _searx_ok() else '$error'}]●[/]web")
-        out.append(" ".join(dots))
+        model = loaded[0] if isinstance(loaded, list) and loaded else None
+        out.append(self._row("[$text-muted]model[/]", _clip(model, 15) if model
+                             else "[$text-muted]unloaded[/]"))
         disk = s.get("disk", {})
         if disk:
-            out.append(f"[$text-muted]{disk['free_gb']} GB disk free[/]")
+            out.append(self._row("[$text-muted]disk free[/]", f"{disk['free_gb']} GB"))
+        dots = []
+        for name, short in (("postgres", "db"), ("qdrant", "vec"), ("embed_server", "emb")):
+            dots.append(f"[{'$success' if s.get(name) == 'up' else '$error'}]●[/] [$text-muted]{short}[/]")
+        dots.append(f"[{'$success' if _searx_ok() else '$error'}]●[/] [$text-muted]web[/]")
+        out.append(" ".join(dots))
         return "\n".join(out)
 
 
 # ================================================================ chat widgets
 
 class UserMsg(Static):
+    """His message: a quiet shaded block with a caret, like the prompt it
+    came from — set apart from Johan's answers by shape, not by colour."""
+
     def __init__(self, text):
-        super().__init__(f"[b $accent]you[/] [$text-muted]{_hm()}[/]\n{Text(text).markup}",
+        super().__init__(f"[b $accent]›[/] {Text(text).markup}  [$text-muted]{_hm()}[/]",
                          classes="msg-user")
 
 
@@ -245,7 +310,7 @@ class Note(Static):
 
     def __init__(self, text, kind="note"):
         style = {"note": "$text-muted", "err": "$error", "ok": "$success"}[kind]
-        mark = {"note": "·", "err": "!", "ok": "✓"}[kind]
+        mark = {"note": "·", "err": "✗", "ok": "✓"}[kind]
         super().__init__(f"[{style}]{mark} {Text(str(text)).markup}[/]",
                          classes=f"note note-{kind}")
 
@@ -266,29 +331,38 @@ class Turn(Vertical):
         self.pending_steps = []
         # Shown from the start, so there is something under the question
         # while Johan works — not just a spinner down in the status bar.
-        self.activity = Collapsible(title="thinking…", collapsed=True, classes="activity")
+        self.activity = Collapsible(title="thinking…", collapsed=True, classes="activity",
+                                    collapsed_symbol="▸", expanded_symbol="▾")
         self.answer = Markdown("", classes="answer")
         self.answer.display = False
+        # Johan's answers hang off a bullet, Claude-Code style: the shape
+        # alone says who is talking, so the text itself can stay plain.
+        self.bullet = Static("⏺", classes="bullet")
+        self.bullet.display = False
+        self.body = Horizontal(self.bullet, self.answer, classes="answer-row")
         self.meta = Static("", classes="meta")
 
     def compose(self) -> ComposeResult:
         yield self.activity
-        yield self.answer
+        yield self.body
         yield self.meta
 
     def add_step(self, name, args, result):
         failed = isinstance(result, dict) and bool(result.get("error"))
         brief = ", ".join(f"{k}={str(v)[:60]}" for k, v in (args or {}).items())
-        line = (f"[$error]✗[/] {name}({brief})  [$error]{str(result.get('error'))[:90]}[/]"
-                if failed else f"[$success]✓[/] {name}([$text-muted]{brief}[/])")
+        safe = Text(brief).markup
+        line = (f"[$text-muted]⎿[/] [$error]✗ {name}[/][$text-muted]({safe})[/]  "
+                f"[$error]{Text(str(result.get('error'))[:90]).markup}[/]"
+                if failed else f"[$text-muted]⎿[/] [$success]✓[/] {name}[$text-muted]({safe})[/]")
         self.steps.append((name, failed))
         self.activity.display = True
         self.activity.query_one(Collapsible.Contents).mount(Static(line, classes="step"))
-        self.activity.title = f"{VERBS.get(name, name)}…  ({len(self.steps)} step{'s' * (len(self.steps) > 1)})"
+        self.activity.title = f"{VERBS.get(name, name)}…  · {len(self.steps)} step{'s' * (len(self.steps) > 1)}"
 
     def set_text(self, text):
         if text:
             self.answer.display = True
+            self.bullet.display = True
             self.answer.update(text)
 
     def finish(self, interrupted=False):
@@ -306,8 +380,8 @@ class Turn(Vertical):
                                    f"{summary}" + (f" · {fails} failed" if fails else ""))
         bits = [f"{secs:.1f}s"]
         if interrupted:
-            bits.append("stopped")
-        self.meta.update(f"[$text-muted]johan · {_hm()} · {' · '.join(bits)}[/]")
+            bits.append("[$warning]stopped[/]")
+        self.meta.update(f"[$text-disabled]johan · {_hm()} · {' · '.join(bits)}[/]")
 
 
 def _picture(path):
@@ -406,14 +480,15 @@ class Welcome(Vertical):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Static("[b $accent]johan[/]  [$text-muted]your assistant — everything "
-                     "runs on this machine[/]", id="w-title")
+        yield Static("[b $accent]✻[/] [b]Welcome back.[/]  [$text-muted]Johan runs entirely "
+                     "on this machine.[/]", id="w-title")
         yield Static("", id="w-state")
+        yield Static("[$text-muted]Try[/]", id="w-try")
         with Grid(id="w-grid"):
             for i, (label, _) in enumerate(self.STARTERS):
-                yield Button(label, id=f"start-{i}", classes="starter")
-        yield Static("[$text-muted]type a question · [b]/[/b] for commands · "
-                     "[b]ctrl+p[/b] everything · [b]F1[/b] help[/]", id="w-hint")
+                yield Button(f"› {label}", id=f"start-{i}", classes="starter")
+        yield Static("[$text-muted][$text]/[/] commands  ·  [$text]ctrl+p[/] everything  ·  "
+                     "[$text]F1[/] help[/]", id="w-hint")
 
     def on_mount(self):
         self.refresh_state()
@@ -428,22 +503,24 @@ class Welcome(Vertical):
             if n:
                 stale = (f"  [$warning]· {age} days old — F3 then [b]r[/b] to rebuild[/]"
                          if age is not None and age >= 7 else "")
-                lines.append(f"[$success]●[/] {n} jobs in your queue · {applied} applied{stale}")
+                lines.append(f"[$success]●[/] {n} jobs in your queue [$text-muted]· "
+                             f"{applied} applied · F3[/]{stale}")
             else:
-                lines.append("[$warning]●[/] no apply queue yet — F3 then [b]r[/b]")
+                lines.append("[$warning]●[/] no apply queue yet [$text-muted]— F3 then [b]r[/b][/]")
         except Exception:
             pass
         try:
             edits = jt.list_edits()["count"] + len(jx.list_actions())
             if edits:
-                lines.append(f"[$warning]●[/] {edits} change{'s' * (edits > 1)} waiting for you — F4")
+                lines.append(f"[$warning]●[/] {edits} change{'s' * (edits > 1)} waiting for you "
+                             f"[$text-muted]· F4[/]")
         except Exception:
             pass
         try:
             import johan_images as ji
             imgs = len(ji.list_images(500))
             if imgs:
-                lines.append(f"[$accent]●[/] {imgs} image{'s' * (imgs > 1)} drawn — F5")
+                lines.append(f"[$accent]●[/] {imgs} image{'s' * (imgs > 1)} drawn [$text-muted]· F5[/]")
         except Exception:
             pass
         self.query_one("#w-state", Static).update("\n".join(lines))
@@ -620,7 +697,7 @@ class JobsPane(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static("", id="jhead")
-        yield DataTable(id="jtable", cursor_type="row", zebra_stripes=True)
+        yield DataTable(id="jtable", cursor_type="row", zebra_stripes=False)
         yield VerticalScroll(Static("", id="jdetail"), id="jdetailbox")
 
     def on_mount(self):
@@ -652,17 +729,17 @@ class JobsPane(Vertical):
         for i, r in enumerate(self.rows, 1):
             done = r["job_id"] in applied
             if r.get("gaps_in_title"):
-                flag = Text(f"gap: {','.join(r['gaps_in_title'])}"[:22], style="red")
+                flag = Text(f"gap: {','.join(r['gaps_in_title'])}"[:22], style=SOFT["red"])
             elif r.get("experience_note"):
-                flag = Text(r["experience_note"][:22], style="yellow")
+                flag = Text(r["experience_note"][:22], style=SOFT["yellow"])
             else:
-                flag = Text("good fit", style="green")
-            cv = Text("✓", style="green") if r.get("pdf") else Text("—", style="dim")
+                flag = Text("good fit", style=SOFT["green"])
+            cv = Text("✓", style=SOFT["green"]) if r.get("pdf") else Text("—", style="dim")
             table.add_row(
-                Text("✓", style="bold green") if done else Text(str(i), style="dim"),
+                Text("✓", style="bold " + SOFT["green"]) if done else Text(str(i), style="dim"),
                 Text(r["company"][:14], style="dim" if done else ""),
                 Text(r["title"][:42], style="dim" if done else "bold"),
-                Text(f"{r['fit_score']:g}", style="cyan"), cv, flag, key=str(r["job_id"]))
+                Text(f"{r['fit_score']:g}", style=SOFT["blue"]), cv, flag, key=str(r["job_id"]))
         if focus:
             table.focus()
         if keep and keep < len(self.rows):
@@ -732,7 +809,7 @@ class ImagesPane(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal():
             with Vertical(id="ileft"):
-                yield DataTable(id="itable", cursor_type="row", zebra_stripes=True)
+                yield DataTable(id="itable", cursor_type="row", zebra_stripes=False)
             yield Vertical(id="ipreview")
 
     def on_mount(self):
@@ -808,7 +885,7 @@ class EditsPane(Vertical):
                 Binding("u", "app.undo_change", "undo last change")]
 
     def compose(self) -> ComposeResult:
-        yield DataTable(id="etable", cursor_type="row", zebra_stripes=True)
+        yield DataTable(id="etable", cursor_type="row", zebra_stripes=False)
         yield VerticalScroll(Static("", id="ediff"), id="ediffbox")
 
     def on_mount(self):
@@ -956,67 +1033,128 @@ class JohanApp(App):
     COMMANDS = App.COMMANDS | {JohanCommands}
 
     CSS = """
-    Screen { layout: vertical; }
+    Screen { layout: vertical; background: $background; }
+    * { scrollbar-size-vertical: 1; scrollbar-background: $background;
+        scrollbar-background-hover: $background; scrollbar-background-active: $background;
+        scrollbar-color: $panel; scrollbar-color-hover: $accent 50%;
+        scrollbar-color-active: $accent; }
     #body { height: 1fr; }
     #main { width: 1fr; }
-    Sidebar { width: 32; padding: 0 1 0 0; }
-    Sidebar.hidden { display: none; }
-    .panel { border: round $panel; padding: 0 1; margin-bottom: 1; height: auto;
-             border-title-color: $accent; border-title-style: bold; }
 
-    #chat { padding: 0 2; }
-    .msg-user { margin: 1 0 0 0; padding: 0 1; border-left: outer $accent; }
+    /* ---- tabs: quiet labels, one accent underline under the active one */
+    #main > ContentTabs { height: 2; }
+    #main Tab { color: $text-muted; padding: 0 2; }
+    #main Tab.-active { color: $text; text-style: bold; }
+    #main Tab:hover { color: $text; }
+    #main Underline > .underline--bar { color: $accent; background: $panel 40%; }
+    TabPane { padding: 0; }
+
+    /* ---- sidebar: a calm column of sections, not a stack of boxes */
+    Sidebar { width: 30; background: $surface; padding: 0 1; }
+    Sidebar.hidden { display: none; }
+    #brand { height: 1; margin: 0 0 1 1; }
+    .panel { border: none; border-top: solid $panel; padding: 0 1; margin: 0 0 1 0;
+             height: auto; border-title-color: $text-muted; border-title-style: bold;
+             border-title-align: left; }
+
+    /* ---- chat */
+    #chat { padding: 0 2 1 2; scrollbar-size-vertical: 1; }
+    .msg-user { margin: 1 0 0 0; padding: 0 1; background: $surface; color: $text; }
     Turn { height: auto; margin: 1 0 0 0; }
-    .activity { border: none; padding: 0; margin: 0 0 0 1; background: transparent; }
-    .activity > CollapsibleTitle { color: $text-muted; padding: 0; }
-    .step { margin: 0 0 0 2; }
-    .answer { margin: 0; padding: 0 1; border-left: outer $success; }
-    .meta { margin: 0 0 0 1; height: auto; }
-    .note { margin: 0 0 0 1; }
-    .imagecard { height: auto; margin: 1 0 0 1; padding: 0 1; border-left: outer $accent; }
+    .activity { border: none; padding: 0; margin: 0; background: transparent; }
+    .activity > CollapsibleTitle { color: $text-muted; padding: 0 0 0 1; background: transparent; }
+    .activity > CollapsibleTitle:hover { color: $text; background: transparent; }
+    .activity > CollapsibleTitle:focus { color: $text; background: transparent; text-style: none; }
+    .activity > Contents { padding: 0 0 0 3; }
+    .step { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+    .answer-row { height: auto; }
+    .bullet { width: 2; color: $accent; margin: 0 0 0 1; }
+    .answer { width: 1fr; margin: 0; padding: 0 1 0 0; background: transparent; }
+    .meta { margin: 0 0 0 3; height: auto; }
+    .note { margin: 1 0 0 1; height: auto; }
+    .imagecard { height: auto; margin: 1 0 0 3; padding: 0; }
     .imagecap { margin: 0; }
 
-    Welcome { height: auto; margin: 2 2; padding: 1 2; border: round $accent; }
+    /* ---- the home card */
+    Welcome { height: auto; margin: 1 0 0 0; padding: 1 2; border: round $panel; }
     #w-title { margin-bottom: 1; }
     #w-state { margin-bottom: 1; height: auto; }
-    #w-grid { grid-size: 3; grid-gutter: 0 1; height: auto; margin-bottom: 1; }
-    .starter { width: 100%; min-width: 10; }
+    #w-try { height: 1; }
+    #w-grid { grid-size: 2; grid-gutter: 0 2; grid-rows: 1; height: auto; margin-bottom: 1; }
+    .starter { width: 100%; min-width: 10; height: 1; border: none; padding: 0;
+               background: transparent; color: $text; text-style: none;
+               content-align: left middle; text-align: left; }
+    .starter:hover { background: $surface; color: $accent; border: none; }
+    .starter:focus { background: $surface; color: $accent; text-style: none; border: none; }
     #w-hint { height: auto; }
 
-    #status { height: 1; padding: 0 2; background: $boost; color: $text-muted; }
+    /* ---- the prompt box and the status line under it */
+    #promptbox { height: 3; margin: 0 1; border: round $panel; background: $background; }
+    #promptbox:focus-within { border: round $accent 70%; }
+    #caret { width: 3; color: $accent; text-style: bold; padding: 0 0 0 1; }
+    #prompt { border: none; background: transparent; padding: 0 1 0 0; height: 1; }
+    #prompt:focus { border: none; background-tint: transparent; }
+    #prompt > .input--placeholder { color: $text-disabled; }
+    #statusbar { height: 1; padding: 0 2; }
+    #status { width: 1fr; color: $text-muted; }
     #status.busy { color: $accent; }
-    #prompt { border: round $panel; }
-    #prompt:focus { border: round $accent; }
+    #statusr { width: auto; color: $text-disabled; }
 
-    #jhead { height: auto; padding: 0 1; }
+    Footer { background: $background; }
+    Footer FooterKey { background: $background; }
+    Footer FooterKey .footer-key--key { color: $accent; background: transparent; }
+    Footer FooterKey .footer-key--description { color: $text-muted; }
+
+    /* ---- tables (jobs, images, changes) */
+    DataTable { background: transparent; scrollbar-size-vertical: 1; }
+    DataTable > .datatable--header { background: transparent; color: $text-muted;
+                                     text-style: bold; }
+    DataTable > .datatable--cursor { background: $accent 22%; color: $text; text-style: none; }
+    DataTable:blur > .datatable--cursor { background: $panel; }
+    DataTable > .datatable--hover { background: $panel 50%; }
+    #jhead { height: auto; padding: 0 1 1 1; }
     #jtable, #etable { height: 1fr; }
-    #jdetailbox { height: 45%; border: round $panel; padding: 0 1;
-                  border-title-color: $accent; border-title-style: bold; }
-    #ediffbox { height: 55%; border: round $panel; padding: 0 1;
-                border-title-color: $accent; border-title-style: bold; }
+    #jdetailbox { height: 45%; border: round $panel; padding: 0 1; margin: 0 1 0 0;
+                  border-title-color: $text-muted; border-title-style: bold; }
+    #ediffbox { height: 55%; border: round $panel; padding: 0 1; margin: 0 1 0 0;
+                border-title-color: $text-muted; border-title-style: bold; }
     #ileft { width: 45%; }
     #itable { height: 1fr; }
     #ipreview { width: 55%; border: round $panel; padding: 0 1;
-                border-title-color: $accent; border-title-style: bold; }
+                border-title-color: $text-muted; border-title-style: bold; }
 
-    HistoryScreen, HelpScreen { align: center middle; }
-    #hbox { width: 88%; height: 82%; background: $surface; border: round $accent;
+    /* ---- modals */
+    HistoryScreen, HelpScreen { align: center middle; background: $background 60%; }
+    #hbox { width: 88%; height: 82%; background: $surface; border: round $panel;
             border-title-color: $accent; border-title-style: bold; }
     #hleft { width: 42%; border-right: solid $panel; }
     #hright { width: 58%; padding: 0 1; }
-    #hfilter { border: none; background: $boost; }
+    #hfilter { border: none; background: $background; }
     #hhint { color: $text-muted; padding: 0 0 1 0; }
-    #helpbox { width: 84; height: 86%; background: $surface; border: round $accent;
-               padding: 0 2; border-title-color: $accent; border-title-style: bold; }
+    #helpbox { width: 88; max-width: 96%; height: 88%; background: $surface;
+               border: round $panel; padding: 0 2;
+               border-title-color: $accent; border-title-style: bold; }
+    #helpbox Markdown { background: transparent; }
+    #helpbox { scrollbar-size-vertical: 1; }
+
+    /* ---- command palette: a centred card, not a full-width sheet */
+    CommandPalette > Vertical { width: 90; max-width: 100%; margin-top: 2;
+                                background: $surface; }
+    CommandPalette #--input { border: none; border-bottom: solid $panel; }
+    CommandPalette CommandList { background: $surface; border: none; }
+    CommandPalette CommandList > .option-list--option-highlighted {
+        background: $accent 22%; }
     """
 
     BINDINGS = [
-        Binding("ctrl+q", "quit", "quit"),
+        # The footer shows only what isn't visible elsewhere: F3-F5 are
+        # printed on the tabs themselves, the rest is in F1 and ctrl+p.
+        Binding("ctrl+q", "quit", "quit", show=False),
         Binding("f1", "help_me", "help"),
         Binding("f2", "history", "history"),
-        Binding("f3", "jobs_tab", "jobs"),
-        Binding("f4", "edits_tab", "changes"),
-        Binding("f5", "images_tab", "images"),
+        Binding("f3", "jobs_tab", "jobs", show=False),
+        Binding("f4", "edits_tab", "changes", show=False),
+        Binding("f5", "images_tab", "images", show=False),
         Binding("escape", "interrupt", "stop", show=False),
         Binding("ctrl+n", "new_chat", "new chat"),
         Binding("ctrl+o", "open_last", "open", show=False),
@@ -1048,27 +1186,43 @@ class JohanApp(App):
         self._ticker = None
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
         with Horizontal(id="body"):
             with TabbedContent(id="main", initial="tab-chat"):
                 with TabPane("Chat", id="tab-chat"):
                     yield ChatPane(id="chat")
-                with TabPane("Jobs", id="tab-jobs"):
+                with TabPane("Jobs [$text-disabled]F3[/]", id="tab-jobs"):
                     yield JobsPane(id="jobs")
-                with TabPane("Images", id="tab-images"):
-                    yield ImagesPane(id="images")
-                with TabPane("Changes", id="tab-edits"):
+                with TabPane("Changes [$text-disabled]F4[/]", id="tab-edits"):
                     yield EditsPane(id="edits")
+                with TabPane("Images [$text-disabled]F5[/]", id="tab-images"):
+                    yield ImagesPane(id="images")
             yield Sidebar()
-        yield Static("", id="status")
-        yield Input(placeholder="ask Johan anything — / for commands, ctrl+p for everything",
-                    id="prompt", suggester=SuggestFromList(SLASH, case_sensitive=False))
+        with Horizontal(id="promptbox"):
+            yield Static("›", id="caret")
+            yield Input(placeholder=PROMPT_HINT, id="prompt",
+                        suggester=SuggestFromList(SLASH, case_sensitive=False))
+        with Horizontal(id="statusbar"):
+            yield Static("", id="status")
+            yield Static("", id="statusr")
         yield Footer()
+
+    def get_system_commands(self, screen):
+        """Textual's own palette entries minus the developer ones (Keys,
+        Maximize, Screenshot) that crowded Johan's actions off the screen,
+        and Quit, which sat highlighted first — one stray enter from closing
+        the app (ctrl+q still quits)."""
+        for cmd in super().get_system_commands(screen):
+            if cmd.title not in ("Keys", "Maximize", "Minimize", "Screenshot", "Quit"):
+                yield cmd
 
     # ------------------------------------------------------------ lifecycle
 
     def on_mount(self):
         self.title = "johan"
+        self.register_theme(_fixed_muted(JOHAN_THEME))
+        for name in THEMES[1:]:
+            if name in self.available_themes:
+                self.register_theme(_fixed_muted(self.available_themes[name]))
         self.theme = THEMES[0]
         if self.resume:
             self.messages = ja.load_session()
@@ -1134,16 +1288,30 @@ class JohanApp(App):
 
     def _refresh_sidebar(self):
         self.query_one(Sidebar).refresh_state(self.messages)
+        self._status_right()
 
     # ------------------------------------------------------------ status bar
+
+    def _status_right(self):
+        """Model and context fill, always under the prompt — the sidebar
+        can be hidden, and overflow is the failure you never see coming."""
+        try:
+            u = ja.LAST_USAGE
+            used, ctx = u.get("prompt_tokens", 0), u.get("num_ctx") or 1
+            pct = round(100 * used / ctx)
+            colour = "$text-disabled" if pct < 60 else ("$warning" if pct < 85 else "$error")
+            self.query_one("#statusr", Static).update(
+                f"{ja.MODEL}  ·  [{colour}]{used / 1000:.1f}k / {ctx // 1024}k context ({pct}%)[/]")
+        except Exception:
+            pass
 
     def _set_status(self, text=None):
         bar = self.query_one("#status", Static)
         if self.busy:
             return
         bar.remove_class("busy")
-        bar.update(text or "[$success]●[/] ready  [$text-muted]· / commands · ctrl+p "
-                           "everything · F1 help[/]")
+        bar.update(text or "[$success]●[/] ready  [$text-disabled]·  esc stops  ·  "
+                           "ctrl+p everything[/]")
 
     def _start_busy(self, label):
         self.busy = True
@@ -1161,15 +1329,14 @@ class JohanApp(App):
         self._spin = (self._spin + 1) % len(SPINNER)
         secs = time.monotonic() - self.busy_since
         self.query_one("#status", Static).update(
-            f"{SPINNER[self._spin]} {self.busy_label}  [$text-muted]{secs:4.1f}s · esc to stop[/]")
+            f"{SPINNER[self._spin]} {self.busy_label}…  [$text-muted]{secs:.0f}s  ·  esc to stop[/]")
 
     def _stop_busy(self):
         self.busy = False
         if self._ticker is not None:
             self._ticker.stop()
             self._ticker = None
-        self.query_one("#prompt", Input).placeholder = \
-            "ask Johan anything — / for commands, ctrl+p for everything"
+        self.query_one("#prompt", Input).placeholder = PROMPT_HINT
         self._set_status(None)
 
     # ------------------------------------------------------------ output helpers
@@ -1517,7 +1684,22 @@ class JohanApp(App):
             self._toast(f"couldn't open {target}", error=True)
 
     def action_toggle_sidebar(self):
+        self._sidebar_chosen = True
         self.query_one(Sidebar).toggle_class("hidden")
+
+    SIDEBAR_MIN_WIDTH = 120
+
+    def on_resize(self, event):
+        """Below ~120 columns the sidebar squeezed the chat and the jobs
+        table into scrolling sideways; the status line under the prompt
+        still shows model and context, so it steps aside on its own —
+        until ctrl+b says otherwise."""
+        if getattr(self, "_sidebar_chosen", False):
+            return
+        try:
+            self.query_one(Sidebar).set_class(event.size.width < self.SIDEBAR_MIN_WIDTH, "hidden")
+        except Exception:
+            pass
 
     def action_refresh(self):
         self._refresh_sidebar()
