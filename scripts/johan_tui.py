@@ -39,6 +39,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from rich.markup import escape
 from rich.text import Text
 
 from textual import work
@@ -70,7 +71,7 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SLASH = ["/draw ", "/draw real ", "/draw landscape ", "/draw square ", "/research ", "/review",
          "/refresh",
          "/retry", "/copy", "/new", "/history", "/jobs", "/images", "/edits",
-         "/help", "/theme"]
+         "/help", "/theme", "/forget "]
 
 # What each tool is DOING, in words — "searching the web" reads better than
 # web_search(query=…), and the raw call is still one click away.
@@ -1299,6 +1300,12 @@ class JohanApp(App):
                               "err" if res.get("error") else "ok")
         if cmd == "/resume":
             return self._load_session(arg)
+        if cmd == "/forget":
+            if not arg.isdigit():
+                return self._note("/forget needs a memory id — e.g. /forget 12", "err")
+            res = jt.forget(int(arg))
+            return self._note(res.get("error") or f"forgot: {res['was']}",
+                              "err" if res.get("error") else "ok")
         self._note(f"no command {cmd} — type / and press tab to see them", "err")
 
     # ------------------------------------------------------------ asking
@@ -1339,6 +1346,9 @@ class JohanApp(App):
             interrupted = self.cancel.is_set()
             text = reply or self._stream_buf or "(no answer — try rephrasing)"
             self.call_from_thread(turn.set_text, text)
+            for r in ja.LAST_LEARNED:           # a correction became a rule
+                self.call_from_thread(self._toast, f"{escape(r['text'])}\n/forget {r['memory_id']} to undo",
+                                      "already knew that" if r.get("duplicate") else "learned")
             self.call_from_thread(self._remember_openables, text)
         except Exception as e:
             self.call_from_thread(self._note, f"{type(e).__name__}: {e}", "err")

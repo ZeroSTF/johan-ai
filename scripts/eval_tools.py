@@ -54,6 +54,19 @@ CASES = [
          expect=["memory"]),
     dict(group="memory", prompt="what do you know about me?",
          expect=["memory"]),
+    # Corrections of HOW Johan behaves are learned by code after the turn
+    # (johan_learn), not by a tool call — so these assert on what was saved.
+    dict(group="memory", prompt="stop ending every answer with a question, it's annoying",
+         history=[("user", "what can you do?"),
+                  ("assistant", "Loads — files, the web, your jobs. Want me to check "
+                                "your apply queue?")],
+         learns=True,
+         why="a behaviour correction must become a saved rule (kind feedback)"),
+    dict(group="memory", prompt="no, it's called johan-postgres, not johan-db",
+         history=[("user", "what's my database container called?"),
+                  ("assistant", "It's johan-db.")],
+         learns=False,
+         why="correcting a FACT passes the pre-filter but must not become a rule"),
 
     # --- deterministic ----------------------------------------------------
     dict(group="basics", prompt="what is 1847 * 23?",
@@ -239,8 +252,9 @@ def run_case(case, run_id):
     # model reaches for. An eval on a different prompt is not a regression
     # check on anything.
     messages = [{"role": "system",
-                 "content": ja.prime_with_memories(ja.SYSTEM_PROMPT)},
-                {"role": "user", "content": case["prompt"]}]
+                 "content": ja.prime_with_memories(ja.SYSTEM_PROMPT)}]
+    messages += [{"role": r, "content": c} for r, c in case.get("history", [])]
+    messages.append({"role": "user", "content": case["prompt"]})
     used = []
     started = time.monotonic()
     try:
@@ -262,6 +276,12 @@ def run_case(case, run_id):
     for bad in case.get("forbid", []):
         if bad in used:
             reasons.append(f"used forbidden tool {bad}")
+    if "learns" in case:
+        learned = [r for r in ja.LAST_LEARNED if not r.get("duplicate")]
+        if case["learns"] and not ja.LAST_LEARNED:
+            reasons.append("a correction of his behaviour was not saved as a rule")
+        if not case["learns"] and learned:
+            reasons.append(f"saved a rule it should not have: {learned[0]['text']!r}")
     need = case.get("contains")
     if need and need.lower() not in (answer or "").lower().replace(",", ""):
         reasons.append(f"answer missing {need!r}")

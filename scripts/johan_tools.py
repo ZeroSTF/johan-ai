@@ -70,7 +70,8 @@ def remember(text, kind="fact"):
     text = (text or "").strip()
     if not text:
         return {"error": "nothing to remember"}
-    if kind not in ("fact", "preference", "personal", "project"):
+    # 'feedback' = a behaviour rule learned from his corrections (johan_learn)
+    if kind not in ("fact", "preference", "personal", "project", "feedback"):
         kind = "fact"
 
     conn = _conn()
