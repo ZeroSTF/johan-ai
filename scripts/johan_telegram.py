@@ -327,6 +327,14 @@ def cmd_memory(bot, chat, arg):
     bot.send(chat, "\n".join(lines))
 
 
+def cmd_forget(bot, chat, arg):
+    if not arg.strip().isdigit():
+        bot.send(chat, "Which one? `/forget 12` — ids are in /memory.")
+        return
+    res = jt.forget(int(arg.strip()))
+    bot.send(chat, res.get("error") or f"Forgot: {res['was']}")
+
+
 def cmd_tasks(bot, chat, arg):
     res = jt.tasks("list")
     if not res["tasks"]:
@@ -481,7 +489,7 @@ COMMANDS = {
     "remember": cmd_remember, "memory": cmd_memory, "tasks": cmd_tasks,
     "task": cmd_task, "finish": cmd_finish, "status": cmd_status,
     "new": cmd_new, "help": cmd_help, "start": cmd_help, "refresh": cmd_refresh,
-    "draw": cmd_draw,
+    "draw": cmd_draw, "forget": cmd_forget,
 }
 
 
@@ -537,6 +545,8 @@ def handle_chat(bot, chat, text):
         return
 
     final = (reply or state["buf"] or "(no answer)").strip()
+    for r in ja.LAST_LEARNED:                    # a correction became a rule
+        final += f"\n\n_learned: {r['text']} — /forget {r['memory_id']} to undo_"
 
     # Trim history so a long day of chatting can't outgrow the context window
     if len(history) > HISTORY_TURNS:

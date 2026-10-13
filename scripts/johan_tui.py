@@ -40,6 +40,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from rich.markup import escape
 from rich.text import Text
 
 from textual import work
@@ -108,13 +109,13 @@ PROMPT_HINT = "ask Johan anything  ·  / for commands"
 SLASH = ["/draw ", "/draw real ", "/draw landscape ", "/draw square ", "/research ", "/review",
          "/refresh",
          "/retry", "/rewind", "/copy", "/new", "/history", "/jobs", "/images", "/edits", "/rules",
-         "/help", "/theme"]
+         "/help", "/theme", "/forget "]
 
 # Every name the app handles itself. A commands/<name>.md file with one of
 # these names is ignored: a built-in always wins.
 BUILTIN_SLASH = {"new", "history", "sessions", "jobs", "images", "edits", "help",
                  "review", "retry", "copy", "theme", "refresh", "draw", "research",
-                 "delete", "resume", "rewind", "undo", "rules"}
+                 "delete", "resume", "rewind", "undo", "rules", "forget"}
 
 
 def file_commands():
@@ -1630,6 +1631,12 @@ class JohanApp(App):
                 return self._note(res.get("error") or f"forgot rule: {res['removed']}",
                                   "err" if res.get("error") else "ok")
             return self.action_list_rules()
+        if cmd == "/forget":
+            if not arg.isdigit():
+                return self._note("/forget needs a memory id — e.g. /forget 12", "err")
+            res = jt.forget(int(arg))
+            return self._note(res.get("error") or f"forgot: {res['was']}",
+                              "err" if res.get("error") else "ok")
         if self._file_command(text):
             return
         self._note(f"no command {cmd} — type / and press tab to see them", "err")
@@ -1698,6 +1705,9 @@ class JohanApp(App):
             interrupted = self.cancel.is_set()
             text = reply or self._stream_buf or "(no answer — try rephrasing)"
             self.call_from_thread(turn.set_text, text)
+            for r in ja.LAST_LEARNED:           # a correction became a rule
+                self.call_from_thread(self._toast, f"{escape(r['text'])}\n/forget {r['memory_id']} to undo",
+                                      "already knew that" if r.get("duplicate") else "learned")
             self.call_from_thread(self._remember_openables, text)
         except Exception as e:
             self.call_from_thread(self._note, f"{type(e).__name__}: {e}", "err")

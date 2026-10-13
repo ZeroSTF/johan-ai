@@ -70,7 +70,8 @@ def remember(text, kind="fact"):
     text = (text or "").strip()
     if not text:
         return {"error": "nothing to remember"}
-    if kind not in ("fact", "preference", "personal", "project"):
+    # 'feedback' = a behaviour rule learned from his corrections (johan_learn)
+    if kind not in ("fact", "preference", "personal", "project", "feedback"):
         kind = "fact"
 
     conn = _conn()
@@ -393,9 +394,7 @@ def fetch_page(url, max_chars=1800):
                               "or ask Riadh to add a Reddit API key.",
                      "url": url}
         text = _reddit_text(r.text) or _visible_text(r.text)
-        cap = min(int(max_chars or 1800), 4000)
-        return {"url": url, "chars": len(text), "truncated": len(text) > cap,
-                "text": text[:cap]}
+        return _page_out(url, text, max_chars)
     if "html" in ctype:
         text = _visible_text(r.text)
         # Client-rendered pages (Ashby job boards: "Supabase Jobs", 13 chars)
@@ -412,18 +411,28 @@ def fetch_page(url, max_chars=1800):
                                      "not get around bot checks — use the search "
                                      "snippet.", "url": url}
                 if rendered.get("text") and len(rendered["text"]) > len(text):
-                    text = rendered["text"]
-                    cap = min(int(max_chars or 1800), 4000)
-                    return {"url": url, "rendered": True, "chars": len(text),
-                            "truncated": len(text) > cap, "text": text[:cap]}
+                    return _page_out(url, rendered["text"], max_chars, rendered=True)
         except Exception:
             pass                      # the plain text is still an answer
     elif "json" in ctype:
         text = json.dumps(r.json())[:max_chars * 2]
     else:
         text = r.text
+    return _page_out(url, text, max_chars)
+
+
+def _page_out(url, text, max_chars, **extra):
+    """A long page is read by relevance to his question (johan_reader), not
+    cut at the first N chars — answers deep in a page used to be missed."""
+    import johan_reader as jr
+    if jr.question() and len(text) <= jr.READER_CHARS:
+        return {"url": url, **extra, "chars": len(text), "truncated": False, "text": text}
+    sel = jr.read(text)
+    if sel:
+        return {"url": url, **extra, "chars": len(text), "note": sel["note"],
+                "text": sel["text"]}
     cap = min(int(max_chars or 1800), 4000)
-    return {"url": url, "chars": len(text), "truncated": len(text) > cap,
+    return {"url": url, **extra, "chars": len(text), "truncated": len(text) > cap,
             "text": text[:cap]}
 
 
@@ -813,6 +822,7 @@ SAFE_COMMANDS = {
     "pwd", "which", "whereis", "flatpak", "snap",
     "find", "sort", "xxd", "dmesg", "systemctl", "journalctl", "docker",
     "git", "ollama", "pip", "python3", "ip", "nmcli", "gsettings", "dpkg",
+    "wpctl", "pactl",       # audio state (skills/no-sound.md); read-only subcommands
 }
 
 # Flags that turn a read-only tool into a writing or executing one. Each entry
@@ -846,6 +856,9 @@ SUBCOMMANDS = {
     # exactly the kind of thing this tool must never reach.
     "flatpak": {"list", "info", "remotes", "history", "--version"},
     "snap": {"list", "info", "find", "changes", "version", "--version"},
+    "wpctl": {"status", "inspect", "get-volume"},
+    "pactl": {"info", "list", "get-default-sink", "get-default-source",
+              "get-sink-volume", "get-sink-mute", "get-source-volume", "get-source-mute"},
 }
 
 SENSITIVE = re.compile(
@@ -1629,7 +1642,21 @@ def run_command_tool(command=None, page=None, timeout=20):
         return read_output(page=page)
     if not command:
         return {"error": "run_command needs `command` (or `page` to read more of the last output)"}
-    return run_command(command, timeout=timeout)
+    out = run_command(command, timeout=timeout)
+    if out.get("pages", 1) > 1:
+        # Long output: also show the lines past page 1 that match his question,
+        # so the answer on page 7 doesn't cost six more hops to find.
+        import johan_reader as jr
+        try:
+            first = len(out["output"].splitlines())
+            rel = jr.relevant_lines((TERMINAL_DIR / "last.txt").read_text(), skip_first=first)
+        except Exception:
+            rel = ""
+        if rel:
+            head = out["output"][:1000]
+            out["output"] = head[:head.rfind("\n")] if "\n" in head else head
+            out["relevant_later_lines"] = rel
+    return out
 
 
 import johan_sandbox as _sandbox  # noqa: E402  (after SENSITIVE is defined)

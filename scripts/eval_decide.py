@@ -145,7 +145,33 @@ RESEARCH_CASES = [
     ("dig up the cv you made for supabase", "no"),
 ]
 
+# Corrections of Johan's BEHAVIOUR (saved as rules) vs everything else that
+# passes johan_learn's pre-filter: fact corrections, commands, questions.
+from johan_learn import FEEDBACK_Q, FEEDBACK_OPTS, _context as _fb_ctx  # noqa: E402
+FEEDBACK_CASES = [
+    ("Here's what I found! Want me to dig deeper into anything else?",
+     "stop ending every answer with a question, it's annoying", "yes"),
+    ("- item one\n- item two\n- item three",
+     "don't use bullet points when we're just chatting", "yes"),
+    ("Sure! I can help with your job search too.",
+     "I told you, don't bring up job hunting unless I ask", "yes"),
+    ("It's 30 degrees Fahrenheit.", "from now on always give temperatures in celsius", "yes"),
+    ("Sorry about that! I apologize for the confusion.", "you keep apologizing, just fix it", "yes"),
+    ("I ran `find / -name tf2`.",
+     "never search the whole filesystem, start from my home folder", "yes"),
+    ("The capital of Australia is Sydney.", "no, that's wrong, it's Canberra", "no"),
+    ("Your Postgres container is johan-db.", "no, it's called johan-postgres", "no"),
+    ("Done, I staged the htop install.",
+     "don't install it yet, I want to check something first", "no"),
+    ("Docker is running 3 containers.", "stop the qdrant container", "no"),
+    ("I found 12 jobs.", "never mind, show me the remote ones only", "no"),
+    ("TF2 config is in tf/cfg.",
+     "next time I play I want to try a new crosshair, how do I change it?", "no"),
+    ("You prefer MySQL.", "no I told you I prefer PostgreSQL", "no"),
+]
+
 KINDS = {
+    "feedback": [(FEEDBACK_Q, FEEDBACK_OPTS, _fb_ctx(p, m), w) for p, m, w in FEEDBACK_CASES],
     "route": [(ROUTE_Q, ROUTE, f"Message: {m}", want) for m, want in ROUTE_CASES],
     "research_intent": [(RESEARCH_Q, RESEARCH_OPTS, f"Message: {m}", w) for m, w in RESEARCH_CASES],
     "multi_step": [(MULTI_Q, MULTI_OPTS, f"Message: {m}", w) for m, w in MULTI_CASES],
@@ -153,6 +179,12 @@ KINDS = {
     "supported": [(SUPPORT_Q, SUPPORT_OPTS, c, want) for c, want in SUPPORT_CASES],
     "risky": [(RISKY_Q, RISKY_OPTS, c, want) for c, want in RISKY_CASES],
 }
+HOLDOUT["feedback"] = [(FEEDBACK_Q, FEEDBACK_OPTS, _fb_ctx(p, m), w) for p, m, w in [
+    ("Great question! Let me explain in detail...", "quit writing essays, keep it to two lines", "yes"),
+    ("I checked with run_command: you have 2,260 packages.",
+     "don't guess, how many times do I have to say run the command first", "yes"),
+    ("Your GPU is an RTX 3060.", "no, it's a GTX 1660 Ti", "no"),
+    ("The game is installed in ~/Games.", "don't delete anything in there, just list it", "no")]]
 
 
 def run(kinds, debias, calibrate=True, cases=None):

@@ -56,6 +56,9 @@ import johan_tools as jt              # noqa: E402
 # query) silently evicts the conversation and the assistant starts answering
 # from nothing. Individual tools truncate too — this is the backstop.
 MAX_TOOL_CHARS = 2400
+# fetch_page returns up to johan_reader.READER_CHARS of the page chosen by
+# relevance; the backstop must not then chop that selection in half.
+TOOL_CHAR_CAPS = {"fetch_page": 4000}
 
 OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"
 # JOHAN_MODEL lets the evals score another model through the same code path.
@@ -400,6 +403,9 @@ TOOLS = TOOLS + jt.TOOLS
 import johan_research as _research  # noqa: E402
 import johan_autofill as _autofill  # noqa: E402
 import johan_images as _images  # noqa: E402
+import johan_reader as _reader  # noqa: E402
+import johan_learn as _learn  # noqa: E402
+import johan_skills as _skills  # noqa: E402
 TOOLS = TOOLS + [_research.TOOL, _autofill.TOOL, _images.TOOL]
 DISPATCH["generate_image"] = _images.generate_image
 DISPATCH["deep_research"] = _research.deep_research
@@ -626,8 +632,9 @@ def execute_tool(call, seen, hop, user_message, should_stop=None):
                   ok=not err, error=str(err)[:500] if err else None,
                   duration_ms=int((time.monotonic() - started) * 1000),
                   result_chars=len(payload))
-    if len(payload) > MAX_TOOL_CHARS:
-        payload = payload[:MAX_TOOL_CHARS] + '..."[truncated]"}'
+    cap = TOOL_CHAR_CAPS.get(name, MAX_TOOL_CHARS)
+    if len(payload) > cap:
+        payload = payload[:cap] + '..."[truncated]"}'
     return name, args, result, payload
 
 
@@ -689,10 +696,16 @@ def _maybe_research(q, on_tool, on_delta, should_stop):
             f"_{res['pages_read']} pages read in {res['seconds']}s · saved to {res['path']}_")
 
 
+# Rules learned during the last run_turn ({memory_id, text, duplicate}), so a
+# UI can show "learned: …" with the id to undo it. Empty almost always.
+LAST_LEARNED = []
+
+
 def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
              should_stop=None):
     """Answer one user turn. Dispatches to the configured engine."""
     import johan_steps
+    LAST_LEARNED[:] = []
     if ENGINE == "steps":
         return johan_steps.run_turn_steps(messages, max_hops=max_hops,
                                           on_tool=on_tool, on_delta=on_delta,
@@ -703,10 +716,16 @@ def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
     if report is not None:
         messages.append({"role": "assistant", "content": report})
         return report
+    if not _is_trivial(q):
+        _skills.inject(messages, q)        # a matching recipe from skills/, before his message
     answer = run_turn_loop(messages, max_hops=max_hops, on_tool=on_tool,
                            on_delta=on_delta, should_stop=should_stop)
     if VERIFY_ANSWERS and answer and not answer.startswith("(interrupted"):
         answer = johan_steps._verify_and_fix(messages, start, answer, should_stop)
+    # A correction of how Johan behaves becomes a saved rule. Costs nothing
+    # unless the word-boundary pre-filter fires; the UIs show LAST_LEARNED.
+    LAST_LEARNED[:] = [] if (should_stop and should_stop()) else \
+        _learn.after_turn(messages, start, q)
     return answer
 
 
@@ -719,6 +738,7 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
     tells the user nothing, while "web_search(...)" makes it legible.
     `tools` optionally narrows the schema to a shortlist."""
     user_message = _last_user_message(messages)
+    _reader.set_question(_reader.question_from(messages))   # long pages read by relevance
     seen = {}
     for hop in range(max_hops):
         # On the final hop, take the tools away and demand an answer.
@@ -947,10 +967,17 @@ def prime_with_memories(system_prompt, limit=8):
     every session despite having his details on disk. Kept short because
     context is the scarce resource here."""
     try:
-        mems = jt.list_memories(limit=limit).get("memories", [])
+        # Behaviour rules (kind 'feedback') get their own block below, so
+        # they never crowd facts out of this list or vice versa.
+        mems = [m for m in jt.list_memories(limit=limit + 20).get("memories", [])
+                if m["kind"] != _learn.KIND][:limit]
     except Exception:
         return system_prompt          # DB down: still usable as a chat model
     out = system_prompt
+    try:
+        out += _learn.rules_block(_learn.rules())
+    except Exception:
+        pass
     if mems:
         lines = "\n".join(f"- ({m['kind']}) {m['text']}" for m in mems)
         # "use `memory` for more" was an open invitation, and the model took
