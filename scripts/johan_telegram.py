@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import johan_assistant as ja      # noqa: E402
 import johan_tools as jt          # noqa: E402
 import apply_queue as aq          # noqa: E402
+import johan_commands as jc       # noqa: E402
 
 API = "https://api.telegram.org/bot{token}/{method}"
 TG_LIMIT = 4000                   # Telegram hard-caps a message at 4096
@@ -466,7 +467,13 @@ def cmd_draw(bot, chat, arg):
 
 
 def cmd_help(bot, chat, arg):
-    bot.send(chat, HELP)
+    cmds = jc.load(exclude=COMMANDS)
+    if cmds:
+        rows = "\n".join(f"{jc.usage(c)} — {c.get('description') or ''}".rstrip(" —")
+                         for _, c in sorted(cmds.items()))
+        bot.send(chat, HELP.rstrip() + "\n\n*Your commands*\n" + rows)
+    else:
+        bot.send(chat, HELP)
 
 
 COMMANDS = {
@@ -593,8 +600,15 @@ def handle_update(bot, update):
         fn = COMMANDS.get(head)
         if fn:
             fn(bot, chat, arg)
-        else:
+            return
+        # commands/<name>.md — only after the built-ins, which always win.
+        res = jc.resolve(text, builtins=COMMANDS)
+        if res is None:
             bot.send(chat, f"No command `/{head}`. /help")
+        elif res.get("error"):
+            bot.send(chat, res["error"])
+        else:
+            handle_chat(bot, chat, res["prompt"])
         return
 
     handle_chat(bot, chat, text)

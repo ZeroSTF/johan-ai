@@ -107,6 +107,66 @@ def draw_checks():
     return results
 
 
+def file_command_checks():
+    """commands/*.md over Telegram, against a temp commands dir with the
+    engine stubbed: the expanded prompt reaches the model, a built-in name
+    still runs the built-in, and a stranger reaches nothing."""
+    import tempfile
+    import johan_commands as jc
+    tmp = Path(tempfile.mkdtemp())
+    (tmp / "tldr.md").write_text("---\ndescription: summarise a page\nargs: <url>\n---\n"
+                                 "Read $ARGS and summarise it.\n")
+    (tmp / "jobs.md").write_text("HIJACKED jobs prompt\n")         # clashes with /jobs
+    sent, results = [], {}
+    real = (jc.COMMANDS_DIR, ja.run_turn, tg.ollama_up, ja.prime_with_memories, aq_latest())
+
+    def fake_run_turn(messages, **kw):
+        sent.append(messages[-1]["content"])
+        return "done"
+    jc.COMMANDS_DIR = tmp
+    ja.run_turn, tg.ollama_up = fake_run_turn, (lambda: True)
+    ja.prime_with_memories = lambda s, *a, **k: s
+    tg.aq.latest_queue = lambda: None
+    try:
+        bot = FakeBot({ME})
+        tg.handle_update(bot, update(ME, "/tldr https://example.org/post"))
+        results["file command sends its expanded prompt"] = \
+            sent == ["Read https://example.org/post and summarise it."]
+        results["…as a normal chat turn in his history"] = (
+            bot.histories[ME][-1]["content"] == "Read https://example.org/post and summarise it.")
+
+        sent.clear()
+        bot = FakeBot({ME})
+        tg.handle_update(bot, update(ME, "/tldr"))
+        results["file command without its args shows usage"] = (
+            not sent and any("usage: /tldr <url>" in t for t in bot.texts()))
+
+        bot = FakeBot({ME})
+        tg.handle_update(bot, update(ME, "/jobs"))
+        results["a built-in beats a file with its name"] = (
+            not sent and any("No queue" in t for t in bot.texts()))
+
+        bot = FakeBot({ME})
+        tg.handle_update(bot, update(ME, "/help"))
+        helptext = "\n".join(bot.texts())
+        results["/help lists file commands"] = "/tldr <url>" in helptext and "HIJACKED" not in helptext
+
+        bot = FakeBot({ME})
+        tg.handle_update(bot, update(STRANGER, "/tldr https://example.org"))
+        results["stranger's file command reaches no model"] = not sent and any(
+            "private" in t for t in bot.texts())
+    finally:
+        jc.COMMANDS_DIR, ja.run_turn, tg.ollama_up, ja.prime_with_memories, tg.aq.latest_queue = real
+        for p in tmp.iterdir():
+            p.unlink()
+        tmp.rmdir()
+    return results
+
+
+def aq_latest():
+    return tg.aq.latest_queue
+
+
 def main():
     results = {}
     engine_calls = []
@@ -142,6 +202,7 @@ def main():
         ja.run_turn = real_run_turn
 
     results.update(draw_checks())
+    results.update(file_command_checks())
 
     saved = {k: os.environ.pop(k, None) for k in ("DISPLAY", "WAYLAND_DISPLAY")}
     try:

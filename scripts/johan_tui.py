@@ -59,6 +59,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import johan_assistant as ja      # noqa: E402
 import johan_tools as jt          # noqa: E402
 import johan_actions as jx        # noqa: E402
+import johan_commands as jc       # noqa: E402
 import apply_queue as aq          # noqa: E402
 
 try:                               # real pictures in WezTerm/kitty/sixel terminals
@@ -108,6 +109,42 @@ SLASH = ["/draw ", "/draw real ", "/draw landscape ", "/draw square ", "/researc
          "/refresh",
          "/retry", "/copy", "/new", "/history", "/jobs", "/images", "/edits",
          "/help", "/theme"]
+
+# Every name the app handles itself. A commands/<name>.md file with one of
+# these names is ignored: a built-in always wins.
+BUILTIN_SLASH = {"new", "history", "sessions", "jobs", "images", "edits", "help",
+                 "review", "retry", "copy", "theme", "refresh", "draw", "research",
+                 "delete", "resume"}
+
+
+def file_commands():
+    """commands/*.md, minus anything shadowing a built-in. Re-read only when
+    a file changed, so this is cheap enough to call per keystroke."""
+    try:
+        return jc.load(exclude=BUILTIN_SLASH)
+    except Exception:
+        return {}
+
+
+class SlashSuggester(SuggestFromList):
+    """Tab completion for built-ins AND file commands. The file list is
+    looked up on every keystroke (mtime-cached), so a command dropped into
+    commands/ completes without restarting Johan."""
+
+    def __init__(self):
+        super().__init__(SLASH, case_sensitive=False)
+        self.cache = None                    # the candidate list changes; never cache
+
+    async def get_suggestion(self, value):
+        if not value.startswith("/"):
+            return None
+        low = value.lower()
+        extra = [f"/{n} " if c.get("args") or jc.PLACEHOLDER.search(c["template"]) else f"/{n}"
+                 for n, c in sorted(file_commands().items())]
+        for cand in SLASH + extra:
+            if cand.lower().startswith(low):
+                return cand
+        return None
 
 # What each tool is DOING, in words — "searching the web" reads better than
 # web_search(query=…), and the raw call is still one click away.
@@ -670,12 +707,28 @@ HELP_MD = """\
 """
 
 
+def help_markdown():
+    """HELP_MD plus the commands that live in files, read fresh each time."""
+    cmds = file_commands()
+    if not cmds:
+        extra = ("\n### Your commands\n- none yet — drop a `.md` file in `commands/` "
+                 "(`$ARGS` marks where what you type goes) and it becomes `/name`\n")
+    else:
+        rows = "\n".join(f"- `{jc.usage(c)}` — {c.get('description') or 'no description'}"
+                         for _, c in sorted(cmds.items()))
+        extra = (f"\n### Your commands — from `commands/*.md`\n{rows}\n"
+                 "- add your own: a `.md` file in `commands/`; `$ARGS` marks where "
+                 "what you type goes\n")
+    marker = "\n### Keys"
+    return HELP_MD.replace(marker, extra + marker, 1) if marker in HELP_MD else HELP_MD + extra
+
+
 class HelpScreen(ModalScreen):
     BINDINGS = [Binding("escape", "dismiss", "close"), Binding("f1", "dismiss", "close")]
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="helpbox"):
-            yield Markdown(HELP_MD)
+            yield Markdown(help_markdown())
 
     def on_mount(self):
         self.query_one("#helpbox").border_title = "help"
@@ -1013,6 +1066,8 @@ class JohanCommands(Provider):
     async def discover(self) -> Hits:
         for name, action, help_ in self.COMMANDS:
             yield DiscoveryHit(name, self._run(action), help=help_)
+        for name, cmd in sorted(file_commands().items()):
+            yield DiscoveryHit(jc.usage(cmd), self._file(cmd), help=self._file_help(cmd))
 
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
@@ -1020,6 +1075,29 @@ class JohanCommands(Provider):
             score = matcher.match(name)
             if score > 0:
                 yield Hit(score, matcher.highlight(name), self._run(action), help=help_)
+        for name, cmd in sorted(file_commands().items()):
+            label = jc.usage(cmd)
+            score = max(matcher.match(label), matcher.match(cmd.get("description") or ""))
+            if score > 0:
+                yield Hit(score, matcher.highlight(label), self._file(cmd),
+                          help=self._file_help(cmd))
+
+    @staticmethod
+    def _file_help(cmd):
+        return (cmd.get("description") or "your command") + f"  ·  commands/{cmd['name']}.md"
+
+    def _file(self, cmd):
+        """A file command needing args lands in the prompt for him to finish;
+        one that doesn't runs straight away."""
+        def go():
+            if cmd.get("args") or jc.PLACEHOLDER.search(cmd["template"]):
+                box = self.app.query_one("#prompt", Input)
+                box.value = f"/{cmd['name']} "
+                box.cursor_position = len(box.value)
+                box.focus()
+            else:
+                self.app._submit(f"/{cmd['name']}")
+        return go
 
     def _run(self, action):
         # The action method directly: App.run_action is async, and a plain
@@ -1199,8 +1277,7 @@ class JohanApp(App):
             yield Sidebar()
         with Horizontal(id="promptbox"):
             yield Static("›", id="caret")
-            yield Input(placeholder=PROMPT_HINT, id="prompt",
-                        suggester=SuggestFromList(SLASH, case_sensitive=False))
+            yield Input(placeholder=PROMPT_HINT, id="prompt", suggester=SlashSuggester())
         with Horizontal(id="statusbar"):
             yield Static("", id="status")
             yield Static("", id="statusr")
@@ -1373,7 +1450,18 @@ class JohanApp(App):
     # ------------------------------------------------------------ input
 
     def on_key(self, event):
-        """↑/↓ recall previous questions, like a shell."""
+        """↑/↓ recall previous questions, like a shell; tab accepts the
+        grey slash-command suggestion (it used to move focus instead, though
+        help and the error note both said "press tab")."""
+        if event.key == "tab":
+            box = self.query_one("#prompt", Input)
+            hint = getattr(box, "_suggestion", "")
+            if box.has_focus and hint and box.value.startswith("/") and hint != box.value:
+                box.value = hint
+                box.cursor_position = len(hint)
+                event.prevent_default()
+                event.stop()
+            return
         if event.key not in ("up", "down") or not self.history:
             return
         box = self.query_one("#prompt", Input)
@@ -1466,14 +1554,32 @@ class JohanApp(App):
                               "err" if res.get("error") else "ok")
         if cmd == "/resume":
             return self._load_session(arg)
+        if self._file_command(text):
+            return
         self._note(f"no command {cmd} — type / and press tab to see them", "err")
+
+    def _file_command(self, text):
+        """commands/<name>.md → its expanded prompt, asked like any message.
+        Only reached after every built-in had its chance, so a file can
+        never shadow one. True if it was a file command."""
+        res = jc.resolve(text, builtins=BUILTIN_SLASH)
+        if res is None:
+            return False
+        if res.get("error"):
+            self._drop_welcome()
+            self._note(res["error"], "err")
+        else:
+            self._ask(res["prompt"], shown=text)
+        return True
 
     # ------------------------------------------------------------ asking
 
-    def _ask(self, text):
+    def _ask(self, text, shown=None):
+        """`shown` is what appears in the chat when it differs from what the
+        model gets (a file command shows `/tldr <url>`, sends its prompt)."""
         self.query_one("#main", TabbedContent).active = "tab-chat"
         self._drop_welcome()
-        self._chat().add(UserMsg(text))
+        self._chat().add(UserMsg(shown or text))
         self.messages.append({"role": "user", "content": text})
         self.cancel.clear()
         self.turn = self._chat().add(Turn())
