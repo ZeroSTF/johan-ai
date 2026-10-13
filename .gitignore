@@ -33,3 +33,6 @@ __pycache__/
 
 # project brief with personal details - local only
 /CLAUDE.md
+
+# skill vector cache (johan_skills.py rebuilds it)
+/skills/.index.json

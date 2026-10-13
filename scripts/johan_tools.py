@@ -821,6 +821,7 @@ SAFE_COMMANDS = {
     "pwd", "which", "whereis", "flatpak", "snap",
     "find", "sort", "xxd", "dmesg", "systemctl", "journalctl", "docker",
     "git", "ollama", "pip", "python3", "ip", "nmcli", "gsettings", "dpkg",
+    "wpctl", "pactl",       # audio state (skills/no-sound.md); read-only subcommands
 }
 
 # Flags that turn a read-only tool into a writing or executing one. Each entry
@@ -854,6 +855,9 @@ SUBCOMMANDS = {
     # exactly the kind of thing this tool must never reach.
     "flatpak": {"list", "info", "remotes", "history", "--version"},
     "snap": {"list", "info", "find", "changes", "version", "--version"},
+    "wpctl": {"status", "inspect", "get-volume"},
+    "pactl": {"info", "list", "get-default-sink", "get-default-source",
+              "get-sink-volume", "get-sink-mute", "get-source-volume", "get-source-mute"},
 }
 
 SENSITIVE = re.compile(

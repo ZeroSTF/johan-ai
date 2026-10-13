@@ -404,6 +404,7 @@ import johan_research as _research  # noqa: E402
 import johan_autofill as _autofill  # noqa: E402
 import johan_images as _images  # noqa: E402
 import johan_reader as _reader  # noqa: E402
+import johan_skills as _skills  # noqa: E402
 TOOLS = TOOLS + [_research.TOOL, _autofill.TOOL, _images.TOOL]
 DISPATCH["generate_image"] = _images.generate_image
 DISPATCH["deep_research"] = _research.deep_research
@@ -708,6 +709,8 @@ def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
     if report is not None:
         messages.append({"role": "assistant", "content": report})
         return report
+    if not _is_trivial(q):
+        _skills.inject(messages, q)        # a matching recipe from skills/, appended
     answer = run_turn_loop(messages, max_hops=max_hops, on_tool=on_tool,
                            on_delta=on_delta, should_stop=should_stop)
     if VERIFY_ANSWERS and answer and not answer.startswith("(interrupted"):
