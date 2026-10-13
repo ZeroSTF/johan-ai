@@ -12,6 +12,7 @@ Kept out of johan_tui.py so the app file only gains the glue.
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Vertical
+from textual.content import Content
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static
@@ -22,8 +23,10 @@ STYLE = {jp.PENDING: "$text-muted", jp.ACTIVE: "$accent", jp.DONE: "$success",
          jp.FAILED: "$error", jp.SKIPPED: "$text-muted"}
 
 
-def _esc(s):
-    return Text(str(s)).markup
+def mk(markup, **values):
+    """Markup for OUR labels; model/user text only ever as a $variable —
+    inserted as plain text, never parsed (see johan_tui.mk for why)."""
+    return Content.from_markup(markup, **{k: str(v) for k, v in values.items()})
 
 
 class Choices(Widget, can_focus=True):
@@ -59,7 +62,7 @@ class Choices(Widget, can_focus=True):
             line.choice_index = i
             self._lines.append(line)
             yield line
-        yield Static(f"[$text-muted]{_esc(self.hint or 'number or ↑/↓ + enter to pick · or type your own answer')}[/]",
+        yield Static(mk("[$text-muted]$h[/]", h=self.hint or "number or ↑/↓ + enter to pick · or type your own answer"),
                      classes="choice-hint")
 
     def on_mount(self):
@@ -69,8 +72,7 @@ class Choices(Widget, can_focus=True):
         for i, (line, opt) in enumerate(zip(self._lines, self.options)):
             here = i == self.index and not self.done
             mark = "[b $accent]›[/]" if here else " "
-            label = f"[b]{_esc(opt)}[/]" if here else _esc(opt)
-            line.update(f"{mark} [$accent]{i + 1}[/] {label}")
+            line.update(mk(f"{mark} [$accent]{i + 1}[/] " + ("[b]$o[/]" if here else "$o"), o=opt))
 
     def action_move(self, step):
         if self.options and not self.done:
@@ -141,9 +143,9 @@ class Checklist(Static):
         for s, line in zip(self.progress.steps, self.progress.lines()):
             st = STYLE[s["state"]]
             mark, _, text = line.partition(" ")
-            body = f"[{st}]{_esc(text)}[/]" if s["state"] in (jp.SKIPPED, jp.PENDING) else _esc(text)
-            rows.append(f"[{st}]{mark}[/] {body}")
-        self.update("\n".join(rows))
+            body = f"[{st}]$t[/]" if s["state"] in (jp.SKIPPED, jp.PENDING) else "$t"
+            rows.append(mk(f"[{st}]$m[/] {body}", m=mark, t=text))
+        self.update(Content("\n").join(rows))
 
 
 class PlanCard(Vertical):

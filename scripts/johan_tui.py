@@ -41,6 +41,31 @@ from datetime import datetime
 from pathlib import Path
 
 from rich.markup import escape
+from textual.content import Content
+
+
+# Untrusted text — his messages, model output, job postings, file paths,
+# diffs — NEVER goes into a markup string, escaped or not. Rich's escaper
+# (Text(x).markup) leaves an unterminated "[/" alone while Textual's parser
+# reads it as a closing tag: "MarkupError: auto closing tag ('[/]') has
+# nothing to close" on F2. Even textual.markup.escape crashed on 18% of fuzzed
+# strings. Variables are the only safe channel: `mk("[b]$t[/b]", t=title)`
+# inserts the value as plain text, never parsed (0 crashes in 150k cases).
+def tool_word(name):
+    """A tool name as shown in titles/status. Real names are plain words; a
+    garbled model reply can invent anything, and titles are parsed as markup."""
+    name = str(name)
+    return VERBS.get(name) or (re.sub(r"[^\w.-]", "", name)[:40] or "a tool")
+
+
+def mk(markup, **values):
+    return Content.from_markup(markup, **values)
+
+
+def join_lines(parts):
+    """Lines of fixed markup (str) and/or Content → one Content."""
+    return Content("\n").join(p if isinstance(p, Content) else Content.from_markup(p)
+                              for p in parts)
 from rich.text import Text
 
 from textual import work
@@ -307,10 +332,10 @@ class Sidebar(Vertical):
             return "[$text-muted]nothing open[/]"
         # One line each, cut with an ellipsis: a wrapped task used to spill
         # "contra" onto a line of its own.
-        rows = [f"[$text-muted]○[/] {Text(_clip(r['text'], 22)).markup}" for r in t["tasks"][:5]]
+        rows = [mk("[$text-muted]○[/] $t", t=_clip(r["text"], 22)) for r in t["tasks"][:5]]
         if t["count"] > 5:
             rows.append(f"[$text-muted]  +{t['count'] - 5} more[/]")
-        return "\n".join(rows)
+        return join_lines(rows)
 
     def _machine(self):
         s = jt.system_status()
@@ -343,7 +368,7 @@ class UserMsg(Static):
     came from — set apart from Johan's answers by shape, not by colour."""
 
     def __init__(self, text):
-        super().__init__(f"[b $accent]›[/] {Text(text).markup}  [$text-muted]{_hm()}[/]",
+        super().__init__(mk("[b $accent]›[/] $t  [$text-muted]$hm[/]", t=str(text), hm=_hm()),
                          classes="msg-user")
 
 
@@ -353,7 +378,7 @@ class Note(Static):
     def __init__(self, text, kind="note"):
         style = {"note": "$text-muted", "err": "$error", "ok": "$success"}[kind]
         mark = {"note": "·", "err": "✗", "ok": "✓"}[kind]
-        super().__init__(f"[{style}]{mark} {Text(str(text)).markup}[/]",
+        super().__init__(mk(f"[{style}]{mark} $t[/]", t=str(text)),
                          classes=f"note note-{kind}")
 
 
@@ -392,14 +417,14 @@ class Turn(Vertical):
     def add_step(self, name, args, result):
         failed = isinstance(result, dict) and bool(result.get("error"))
         brief = ", ".join(f"{k}={str(v)[:60]}" for k, v in (args or {}).items())
-        safe = Text(brief).markup
-        line = (f"[$text-muted]⎿[/] [$error]✗ {name}[/][$text-muted]({safe})[/]  "
-                f"[$error]{Text(str(result.get('error'))[:90]).markup}[/]"
-                if failed else f"[$text-muted]⎿[/] [$success]✓[/] {name}[$text-muted]({safe})[/]")
+        line = (mk("[$text-muted]⎿[/] [$error]✗ $n[/][$text-muted]($a)[/]  [$error]$e[/]",
+                   n=str(name), a=brief, e=str(result.get("error"))[:90])
+                if failed else mk("[$text-muted]⎿[/] [$success]✓[/] $n[$text-muted]($a)[/]",
+                                  n=str(name), a=brief))
         self.steps.append((name, failed))
         self.activity.display = True
         self.activity.query_one(Collapsible.Contents).mount(Static(line, classes="step"))
-        self.activity.title = f"{VERBS.get(name, name)}…  · {len(self.steps)} step{'s' * (len(self.steps) > 1)}"
+        self.activity.title = f"{tool_word(name)}…  · {len(self.steps)} step{'s' * (len(self.steps) > 1)}"
 
     def set_text(self, text):
         if text:
@@ -415,7 +440,7 @@ class Turn(Vertical):
             names = {}
             for n, _ in self.steps:
                 names[n] = names.get(n, 0) + 1
-            summary = ", ".join(f"{VERBS.get(n, n)}{f' ×{c}' if c > 1 else ''}"
+            summary = ", ".join(f"{tool_word(n)}{f' ×{c}' if c > 1 else ''}"
                                 for n, c in names.items())
             fails = sum(1 for _, f in self.steps if f)
             self.activity.title = (f"{len(self.steps)} step{'s' * (len(self.steps) > 1)} · "
@@ -495,9 +520,9 @@ class ImageCard(Vertical):
             img.styles.height = 26
             img.styles.width = "auto"
             yield img
-        yield Static(f"[$text-muted]{r.get('prompt', '')[:160]}\n"
-                     f"{r.get('width')}×{r.get('height')} · seed {r.get('seed')} · "
-                     f"{r.get('seconds')}s · ctrl+o opens it · F5 gallery[/]",
+        yield Static(mk("[$text-muted]$p\n$w×$h · seed $s · $sec · ctrl+o opens it · F5 gallery[/]",
+                        p=(r.get("prompt") or "")[:160], w=str(r.get("width")),
+                        h=str(r.get("height")), s=str(r.get("seed")), sec=f"{r.get('seconds')}s"),
                      classes="imagecap")
 
     def file_gone(self):
@@ -607,8 +632,9 @@ class HistoryScreen(ModalScreen):
         lv = self.query_one("#hlist", ListView)
         lv.clear()
         for s in self.shown:
-            lv.append(ListItem(Label(f"[b]{s['when']}[/b]  [$text-muted]{s['messages']} msg[/]\n"
-                                     f"[$text-muted]{Text(s['first'][:40]).markup}[/]")))
+            lv.append(ListItem(Label(mk("[b]$w[/b]  [$text-muted]$n msg[/]\n[$text-muted]$f[/]",
+                                        w=str(s["when"]), n=str(s["messages"]),
+                                        f=str(s["first"] or "")[:40]))))
         if self.shown:
             lv.index = 0
             self._preview(0)
@@ -619,11 +645,11 @@ class HistoryScreen(ModalScreen):
         if not (0 <= idx < len(self.shown)):
             return
         s = self.shown[idx]
-        lines = [f"[b]{s['when']}[/b]  [$text-muted]{s['id']}[/]", ""]
+        lines = [mk("[b]$w[/b]  [$text-muted]$i[/]", w=str(s["when"]), i=str(s["id"])), ""]
         for role, text in ja.session_preview(s["id"], limit=16):
             who = "[$accent]you[/]" if role == "user" else "[$success]johan[/]"
-            lines += [f"{who}  {Text(text.replace(chr(10), ' ')[:200]).markup}", ""]
-        self.query_one("#hpreview", Static).update("\n".join(lines))
+            lines += [mk(f"{who}  $t", t=str(text or "").replace(chr(10), " ")[:200]), ""]
+        self.query_one("#hpreview", Static).update(join_lines(lines))
 
     def on_list_view_highlighted(self, event):
         self.pending_delete = None
@@ -761,18 +787,17 @@ class RewindScreen(ModalScreen):
         self.plan = plan
 
     def compose(self) -> ComposeResult:
-        m = lambda t: Text(str(t)).markup
         out = ["[b]Rewind the last turn[/b] — the question goes back in the box.", ""]
         for key, head, style in (("revert", "Will be reverted:", "$success"),
                                  ("discard", "Waiting, will be discarded:", "$text-muted"),
                                  ("cannot", "Can't be undone (stays as it is):", "$error")):
             if self.plan.get(key):
                 out.append(f"[{style}]{head}[/]")
-                out += [f"  • {m(x)}" for x in self.plan[key]]
+                out += [mk("  • $x", x=str(x)) for x in self.plan[key]]
                 out.append("")
         out.append("[$text-muted]y / enter rewind · n / esc cancel[/]")
         with VerticalScroll(id="rwbox"):
-            yield Static("\n".join(out))
+            yield Static(join_lines(out))
 
     def action_go(self):
         self.dismiss(True)
@@ -881,35 +906,38 @@ class JobsPane(Vertical):
             return
         r = self.rows[idx]
         applied = r["job_id"] in ja.applied_ids()
-        out = [f"[b]{Text(r['title']).markup}[/b]",
-               f"[$accent]{r['company']}[/]  [$text-muted]{r.get('location') or 'no location'} · "
-               f"{r.get('seniority') or '?'} · {r.get('hiring_type') or '?'}[/]", ""]
+        out = [mk("[b]$t[/b]", t=str(r["title"])),
+               mk("[$accent]$c[/]  [$text-muted]$l · $s · $h[/]", c=str(r["company"]),
+                  l=str(r.get("location") or "no location"), s=str(r.get("seniority") or "?"),
+                  h=str(r.get("hiring_type") or "?")), ""]
         if applied:
             out += ["[$success]✓ you marked this applied[/]", ""]
-        out.append(f"[b]why eligible[/b]  {r.get('basis') or 'unknown'}")
+        out.append(mk("[b]why eligible[/b]  $b", b=str(r.get("basis") or "unknown")))
         if r.get("eligibility_quote") and r["eligibility_quote"] != "not stated":
-            out.append(f"[$text-muted]“{Text(r['eligibility_quote'][:240]).markup}”[/]")
+            out.append(mk("[$text-muted]“$q”[/]", q=str(r["eligibility_quote"])[:240]))
         out.append("")
         if r.get("experience_note"):
-            out.append(f"[$warning]⚠ experience: {r['experience_note']}[/]")
+            out.append(mk("[$warning]⚠ experience: $n[/]", n=str(r["experience_note"])))
         if r.get("gaps_in_title"):
-            out.append(f"[$error]⚠ built around {', '.join(r['gaps_in_title'])} — you don't have that[/]")
+            out.append(mk("[$error]⚠ built around $g — you don't have that[/]",
+                          g=", ".join(map(str, r["gaps_in_title"]))))
         if r.get("gaps_in_desc"):
-            out.append(f"[$text-muted]mentions: {', '.join(r['gaps_in_desc'][:6])}[/]")
+            out.append(mk("[$text-muted]mentions: $g[/]", g=", ".join(map(str, r["gaps_in_desc"][:6]))))
         pdf = r.get("pdf")
         try:
             import johan_autofill as jf
             fillable = bool(jf.application_url(r.get("url", "")))
         except Exception:
             fillable = False
-        out += ["", f"[b]matched[/b]  [$text-muted]{', '.join(r.get('matched_skills', [])[:12]) or 'none'}[/]",
-                "", f"[b]cv[/b]    " + (f"[$success]✓ built[/]  [$text-muted]{Path(pdf).parent.name}[/]"
-                                        if pdf else "[$error]not built[/]"),
+        out += ["", mk("[b]matched[/b]  [$text-muted]$m[/]",
+                       m=", ".join(map(str, r.get("matched_skills", [])[:12])) or "none"),
+                "", (mk("[b]cv[/b]    [$success]✓ built[/]  [$text-muted]$p[/]", p=Path(pdf).parent.name)
+                     if pdf else "[b]cv[/b]    [$error]not built[/]"),
                 f"[b]fill[/b]  " + ("[$success]f fills the form for you[/]" if fillable
                                     else "[$text-muted]this portal isn't supported — o opens it[/]"),
-                f"[b]link[/b]  [$text-muted]{r['url'][:76]}[/]", "",
+                mk("[b]link[/b]  [$text-muted]$u[/]", u=str(r["url"])[:76]), "",
                 "[$text-muted]o posting · p CV · f fill · a applied · r rebuild[/]"]
-        self.query_one("#jdetail", Static).update("\n".join(out))
+        self.query_one("#jdetail", Static).update(join_lines(out))
 
 
 # ================================================================ images
@@ -986,9 +1014,10 @@ class ImagesPane(Vertical):
             img.styles.height = "1fr"
             img.styles.width = "auto"
             prev.mount(img)
-        prev.mount(Static(f"[$text-muted]{Text(r.get('prompt') or '').markup}\n"
-                          f"{r.get('width')}×{r.get('height')} · seed {r.get('seed')} · "
-                          f"{r.get('seconds')}s\n\no open · v variation · u reuse prompt · x delete[/]",
+        prev.mount(Static(mk("[$text-muted]$p\n$w×$h · seed $s · $sec\n\n"
+                             "o open · v variation · u reuse prompt · x delete[/]",
+                             p=r.get("prompt") or "", w=str(r.get("width")), h=str(r.get("height")),
+                             s=str(r.get("seed")), sec=f"{r.get('seconds')}s"),
                           classes="imagecap"))
 
 
@@ -1022,17 +1051,16 @@ class EditsPane(Vertical):
                      + [{**e, "kind": "edit"} for e in jt.list_edits()["edits"]])
         if not self.rows:
             last = jx.recent(3)
-            done = "".join(
-                f"\n  {'✓' if r['ok'] else '✗'} #{r['id']} {Text(r.get('why') or '').markup[:60]}"
-                for r in reversed(last))
-            self.query_one("#ediff", Static).update(
-                "[$text-muted]Nothing waiting.\n\nAsk Johan for a change — “install vlc”, "
-                "“make super+v open copyq”, “in scripts/x.py change A to B” — it lands "
-                "here and runs only when you press [b]y[/b]."
-                + (f"\n\nRecent changes (u stages an undo of the last):{done}" if last else "")
-                + (f"\n\n{len(jx.load_rules())} always-allow rule(s) — /rules lists them"
-                   if jx.load_rules() else "")
-                + "[/]")
+            parts = ["[$text-muted]Nothing waiting.\n\nAsk Johan for a change — “install vlc”, "
+                     "“make super+v open copyq”, “in scripts/x.py change A to B” — it lands "
+                     "here and runs only when you press [b]y[/b].[/]"]
+            if last:
+                parts += ["", "[$text-muted]Recent changes (u stages an undo of the last):[/]"]
+                parts += [mk(f"[$text-muted]  {'✓' if r['ok'] else '✗'} #{r['id']} $w[/]",
+                             w=str(r.get("why") or "")[:60]) for r in reversed(last)]
+            if jx.load_rules():
+                parts += ["", f"[$text-muted]{len(jx.load_rules())} always-allow rule(s) — /rules lists them[/]"]
+            self.query_one("#ediff", Static).update(join_lines(parts))
             return
         for r in self.rows:
             if r["kind"] == "action":
@@ -1069,33 +1097,32 @@ class EditsPane(Vertical):
         if r["kind"] == "action":
             return self._show_action(r)
         full = next((x for x in jt._load_edits() if x["id"] == r["id"]), r)
-        out = [f"[b]{r['path']}[/b]", f"[$text-muted]{Text(r.get('why') or '').markup}[/]", ""]
+        out = [mk("[b]$p[/b]", p=str(r["path"])), mk("[$text-muted]$w[/]", w=str(r.get("why") or "")), ""]
         for line in (full.get("diff") or "").splitlines()[:120]:
-            safe = Text(line).markup
             if line.startswith(("+++", "---")):
-                out.append(f"[$text-muted]{safe}[/]")
+                style = "$text-muted"
             elif line.startswith("@@"):
-                out.append(f"[$accent]{safe}[/]")
+                style = "$accent"
             elif line.startswith("+"):
-                out.append(f"[$success]{safe}[/]")
+                style = "$success"
             elif line.startswith("-"):
-                out.append(f"[$error]{safe}[/]")
+                style = "$error"
             else:
-                out.append(f"[$text-muted]{safe}[/]")
+                style = "$text-muted"
+            out.append(mk(f"[{style}]$l[/]", l=line))
         out += ["", "[$text-muted]y apply · n discard[/]"]
-        self.query_one("#ediff", Static).update("\n".join(out))
+        self.query_one("#ediff", Static).update(join_lines(out))
 
     def _show_action(self, a):
-        m = lambda t: Text(str(t)).markup
-        out = [f"[b]Change a{a['id']}[/b]", f"[$text-muted]{m(a.get('why') or 'no reason given')}[/]", ""]
+        out = [f"[b]Change a{a['id']}[/b]", mk("[$text-muted]$w[/]", w=str(a.get("why") or "no reason given")), ""]
         for i, st in enumerate(a["steps"], 1):
             tag = "[$error]ROOT[/] " if st["root"] else ""
-            out.append(f"{i}. {tag}{m(st['what'])}")
-            out.append(f"   [$accent]$ {m(st['shown'])}[/]")
+            out.append(mk(f"{i}. {tag}$w", w=str(st["what"])))
+            out.append(mk("   [$accent]$c[/]", c="$ " + str(st["shown"])))
             if st.get("undo"):
-                out.append(f"   [$text-muted]undo: {m(' '.join(st['undo']))}[/]")
+                out.append(mk("   [$text-muted]undo: $u[/]", u=" ".join(map(str, st["undo"]))))
             elif st.get("undo_note"):
-                out.append(f"   [$text-muted]undo: {m(st['undo_note'])}[/]")
+                out.append(mk("   [$text-muted]undo: $u[/]", u=str(st["undo_note"])))
             else:
                 out.append("   [$warning]no automatic undo[/]")
         out.append("")
@@ -1103,7 +1130,7 @@ class EditsPane(Vertical):
             out.append("[$warning]Root steps open your system's password dialog — "
                        "Johan never sees the password.[/]")
         out.append("[$text-muted]y run · Y run + always allow this kind · n discard[/]")
-        self.query_one("#ediff", Static).update("\n".join(out))
+        self.query_one("#ediff", Static).update(join_lines(out))
 
 
 # ================================================================ command palette
@@ -1485,7 +1512,8 @@ class JohanApp(App):
         self._spin = (self._spin + 1) % len(SPINNER)
         secs = time.monotonic() - self.busy_since
         self.query_one("#status", Static).update(
-            f"{SPINNER[self._spin]} {self.busy_label}…  [$text-muted]{secs:.0f}s  ·  esc to stop[/]")
+            mk(f"{SPINNER[self._spin]} $b…  [$text-muted]{secs:.0f}s  ·  esc to stop[/]",
+               b=str(self.busy_label)))
 
     def _stop_busy(self):
         self.busy = False
@@ -1508,8 +1536,9 @@ class JohanApp(App):
         return self._chat().add(Note(text, kind))
 
     def _toast(self, text, title=None, error=False):
-        self.notify(text[:300], title=title, severity="error" if error else "information",
-                    timeout=12 if not error else 15)
+        # markup=False: toasts carry rule text, paths, job titles, errors.
+        self.notify(str(text)[:300], title=title, severity="error" if error else "information",
+                    timeout=12 if not error else 15, markup=False)
 
     def _remember_openables(self, text):
         for u in self.URL_RE.findall(text or ""):
@@ -1772,7 +1801,7 @@ class JohanApp(App):
                 self.call_from_thread(card.tick, name, jp.failed_result(result))
             if name == "ask" and isinstance(result, dict) and result.get("asked"):
                 self._asked = result
-            self.call_from_thread(setattr, self, "busy_label", VERBS.get(name, name))
+            self.call_from_thread(setattr, self, "busy_label", tool_word(name))
             if name == "generate_image" and isinstance(result, dict) and result.get("path"):
                 self.call_from_thread(self._show_image, result)
             if name == "propose_action" and isinstance(result, dict) and result.get("auto_allowed"):
@@ -1799,7 +1828,7 @@ class JohanApp(App):
                 text = self._asked["question"]     # the options show below as choices
             self.call_from_thread(turn.set_text, text)
             for r in ja.LAST_LEARNED:           # a correction became a rule
-                self.call_from_thread(self._toast, f"{escape(r['text'])}\n/forget {r['memory_id']} to undo",
+                self.call_from_thread(self._toast, f"{r['text']}\n/forget {r['memory_id']} to undo",
                                       "already knew that" if r.get("duplicate") else "learned")
             self.call_from_thread(self._remember_openables, text)
         except Exception as e:
