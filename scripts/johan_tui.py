@@ -90,6 +90,7 @@ import apply_queue as aq          # noqa: E402
 import johan_plan as jp           # noqa: E402
 import johan_interrupt as ji      # noqa: E402
 from johan_widgets import Choices, PlanCard  # noqa: E402
+import johan_widgets as jw  # noqa: E402
 
 try:                               # real pictures in WezTerm/kitty/sixel terminals
     from textual_image.widget import Image as TermImage
@@ -165,6 +166,9 @@ class SlashSuggester(SuggestFromList):
         self.cache = None                    # the candidate list changes; never cache
 
     async def get_suggestion(self, value):
+        return self.suggest_sync(value)
+
+    def suggest_sync(self, value):
         if not value.startswith("/"):
             return None
         low = value.lower()
@@ -1193,7 +1197,7 @@ class JohanCommands(Provider):
         one that doesn't runs straight away."""
         def go():
             if cmd.get("args") or jc.PLACEHOLDER.search(cmd["template"]):
-                box = self.app.query_one("#prompt", Input)
+                box = self.app.query_one("#prompt")
                 box.value = f"/{cmd['name']} "
                 box.cursor_position = len(box.value)
                 box.focus()
@@ -1269,10 +1273,10 @@ class JohanApp(App):
     #w-hint { height: auto; }
 
     /* ---- the prompt box and the status line under it */
-    #promptbox { height: 3; margin: 0 1; border: round $panel; background: $background; }
+    #promptbox { height: auto; max-height: 10; margin: 0 1; border: round $panel; background: $background; }
     #promptbox:focus-within { border: round $accent 70%; }
     #caret { width: 3; color: $accent; text-style: bold; padding: 0 0 0 1; }
-    #prompt { border: none; background: transparent; padding: 0 1 0 0; height: 1; }
+    #prompt { border: none; background: transparent; padding: 0 1 0 0; height: 1; max-height: 8; }
     #prompt:focus { border: none; background-tint: transparent; }
     #prompt > .input--placeholder { color: $text-disabled; }
     #statusbar { height: 1; padding: 0 2; }
@@ -1385,7 +1389,7 @@ class JohanApp(App):
             yield Sidebar()
         with Horizontal(id="promptbox"):
             yield Static("›", id="caret")
-            yield Input(placeholder=PROMPT_HINT, id="prompt", suggester=SlashSuggester())
+            yield jw.PromptArea(placeholder=PROMPT_HINT, id="prompt", suggester=SlashSuggester())
         with Horizontal(id="statusbar"):
             yield Static("", id="status")
             yield Static("", id="statusr")
@@ -1423,7 +1427,7 @@ class JohanApp(App):
             self._fresh()
         self._set_status("starting the model…")
         self._refresh_sidebar()
-        self.query_one("#prompt", Input).focus()
+        self.query_one("#prompt").focus()
         self.warm_up()
 
     def _fresh(self):
@@ -1505,7 +1509,7 @@ class JohanApp(App):
         self.busy_label = label
         self.busy_since = time.monotonic()
         self.query_one("#status", Static).add_class("busy")
-        self.query_one("#prompt", Input).placeholder = "working… (esc to stop)"
+        self.query_one("#prompt").placeholder = "working… (esc to stop)"
         if self._ticker is None:
             self._ticker = self.set_interval(0.15, self._tick)
         self._tick()
@@ -1524,7 +1528,7 @@ class JohanApp(App):
         if self._ticker is not None:
             self._ticker.stop()
             self._ticker = None
-        self.query_one("#prompt", Input).placeholder = PROMPT_HINT
+        self.query_one("#prompt").placeholder = PROMPT_HINT
         self._set_status(None)
 
     # ------------------------------------------------------------ output helpers
@@ -1566,7 +1570,7 @@ class JohanApp(App):
         grey slash-command suggestion (it used to move focus instead, though
         help and the error note both said "press tab")."""
         if event.key == "tab":
-            box = self.query_one("#prompt", Input)
+            box = self.query_one("#prompt")
             hint = getattr(box, "_suggestion", "")
             if box.has_focus and hint and box.value.startswith("/") and hint != box.value:
                 box.value = hint
@@ -1576,8 +1580,13 @@ class JohanApp(App):
             return
         if event.key not in ("up", "down") or not self.history:
             return
-        box = self.query_one("#prompt", Input)
+        box = self.query_one("#prompt")
         if not box.has_focus:
+            return
+        # In a multi-line message ↑/↓ move between lines; history recall only
+        # from the first line (↑) or the last line (↓).
+        row, last = box.cursor_location[0], box.document.line_count - 1
+        if (event.key == "up" and row != 0) or (event.key == "down" and row != last):
             return
         if event.key == "up":
             self.history_pos = (len(self.history) - 1 if self.history_pos is None
@@ -1599,7 +1608,7 @@ class JohanApp(App):
         bid = event.button.id or ""
         if bid.startswith("start-"):
             _, prompt = Welcome.STARTERS[int(bid.split("-")[1])]
-            box = self.query_one("#prompt", Input)
+            box = self.query_one("#prompt")
             if prompt.endswith(" "):          # a template: let him finish it
                 box.value = prompt
                 box.cursor_position = len(prompt)
@@ -1863,7 +1872,7 @@ class JohanApp(App):
             except Exception:
                 pass
         try:
-            (focus or self.query_one("#prompt", Input)).focus()
+            (focus or self.query_one("#prompt")).focus()
         except Exception:
             pass
         try:
@@ -1988,7 +1997,7 @@ class JohanApp(App):
         self.query_one("#main", TabbedContent).active = "tab-chat"
         self._fresh()
         self._refresh_sidebar()
-        self.query_one("#prompt", Input).focus()
+        self.query_one("#prompt").focus()
         self.warm_up()           # a new chat's first question re-reads the prefix
 
     def action_retry(self):
@@ -2061,7 +2070,7 @@ class JohanApp(App):
         else:
             self._fresh()
         self.query_one("#main", TabbedContent).active = "tab-chat"
-        box = self.query_one("#prompt", Input)
+        box = self.query_one("#prompt")
         box.value, box.cursor_position = text, len(text)
         box.focus()
         try:
@@ -2132,12 +2141,12 @@ class JohanApp(App):
         self.messages.append({"role": "user", "content": "[interrupted you mid-answer]"})
 
     def action_start_draw(self):
-        box = self.query_one("#prompt", Input)
+        box = self.query_one("#prompt")
         box.value, box.cursor_position = "/draw ", 6
         box.focus()
 
     def action_start_research(self):
-        box = self.query_one("#prompt", Input)
+        box = self.query_one("#prompt")
         box.value, box.cursor_position = "/research ", 10
         box.focus()
 
@@ -2378,7 +2387,7 @@ class JohanApp(App):
         r = self.query_one(ImagesPane).selected()
         if not r:
             return
-        box = self.query_one("#prompt", Input)
+        box = self.query_one("#prompt")
         real = "real " if r.get("style") == "real" else ""
         box.value = f"/draw {real}{r.get('prompt', '')}"
         box.cursor_position = len(box.value)
@@ -2402,7 +2411,7 @@ class JohanApp(App):
         if not r:
             return
         self.query_one("#main", TabbedContent).active = "tab-chat"
-        box = self.query_one("#prompt", Input)
+        box = self.query_one("#prompt")
         real = "real " if r.get("style") == "real" else ""
         box.value = f"/draw {real}{_quote_path(r['path'])} "
         box.cursor_position = len(box.value)

@@ -53,7 +53,7 @@ def answer_text(turn):
 
 
 async def ask(app, pilot, text, timeout=150):
-    box = app.query_one("#prompt", Input)
+    box = app.query_one("#prompt")
     box.value = text
     await pilot.press("enter")
     await wait_until(pilot, lambda: app.busy, 5)
@@ -74,7 +74,7 @@ async def run(draw=True):
 
         print("startup")
         check("welcome card on an empty chat", app.query(tui.Welcome))
-        check("prompt has focus", app.query_one("#prompt", Input).has_focus)
+        check("prompt has focus", app.query_one("#prompt").has_focus)
         warm = await wait_until(pilot, lambda: "ready" in str(app.query_one("#status").render()), 60)
         check("model warms up and status says ready", warm)
         shot("01-home")
@@ -100,7 +100,7 @@ async def run(draw=True):
         shot("02-chat")
 
         print("esc stops a long answer")
-        box = app.query_one("#prompt", Input)
+        box = app.query_one("#prompt")
         box.value = "Write a 600-word essay about the history of the Mediterranean sea."
         await pilot.press("enter")
         t_ask = time.monotonic()
@@ -114,12 +114,12 @@ async def run(draw=True):
               f"{len(answer_text(app.turn).split())} words kept")
 
         print("input conveniences")
-        app.query_one("#prompt", Input).focus()
+        app.query_one("#prompt").focus()
         await pilot.press("up")
         check("↑ recalls the last question",
-              app.query_one("#prompt", Input).value.startswith("Write a 600-word essay"))
-        app.query_one("#prompt", Input).value = ""
-        app.query_one("#prompt", Input).value = "/nosuchcommand"
+              app.query_one("#prompt").value.startswith("Write a 600-word essay"))
+        app.query_one("#prompt").value = ""
+        app.query_one("#prompt").value = "/nosuchcommand"
         await pilot.press("enter")
         await pilot.pause(0.3)
         notes = [str(n.render()) for n in app.query(tui.Note)]
@@ -167,11 +167,11 @@ async def run(draw=True):
         shot("04-jobs")
         await pilot.press("up")
         app.query_one("#main", TabbedContent).active = "tab-chat"
-        app.query_one("#prompt", Input).focus()
+        app.query_one("#prompt").focus()
 
         if draw:
             print("draw, then delete the chat it's in (the old crash)")
-            app.query_one("#prompt", Input).value = "/draw square red apple on a wooden table"
+            app.query_one("#prompt").value = "/draw square red apple on a wooden table"
             await pilot.press("enter")
             done = await wait_until(pilot, lambda: not app.busy, 240)
             cards = list(app.query(tui.ImageCard))
@@ -180,7 +180,7 @@ async def run(draw=True):
             path = Path(cards[-1].result["path"]) if cards else None
             check("image file saved", path and path.exists())
             shot("05-draw")
-            app.query_one("#prompt", Input).value = "/delete"
+            app.query_one("#prompt").value = "/delete"
             await pilot.press("enter")
             await pilot.pause(1.0)
             check("bare /delete clears the screen to a fresh chat", app.query(tui.Welcome))

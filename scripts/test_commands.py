@@ -141,7 +141,7 @@ async def pilot(tmp):
     app = App()
     async with app.run_test(size=(120, 36)) as p:
         await p.pause(0.3)
-        box = app.query_one("#prompt", Input)
+        box = app.query_one("#prompt")
         box.focus()
         await p.press("slash", "t", "l")
         await p.pause(0.3)

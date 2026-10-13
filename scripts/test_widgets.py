@@ -66,7 +66,7 @@ async def widgets_alone():
         ch.done = False
         ch.focus()
         await pilot.press("h", "i")
-        box = app.query_one("#prompt", Input)
+        box = app.query_one("#prompt")
         check("choices: typing goes to the prompt (free answer)", (box.value, box.has_focus),
               ("hi", True))
 
@@ -140,7 +140,7 @@ async def in_the_app():
                     app.save_screenshot(f"{name}.svg", path=os.environ["JOHAN_SHOTS"])
 
             async def say(text):
-                box = app.query_one("#prompt", Input)
+                box = app.query_one("#prompt")
                 box.focus()
                 box.value = text
                 await pilot.press("enter")

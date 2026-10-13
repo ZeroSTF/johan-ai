@@ -57,7 +57,7 @@ async def drive(scratch):
 
         # --- /rules lists them
         await pilot.press("f4")
-        prompt = app.query_one("#prompt", tui.Input)
+        prompt = app.query_one("#prompt")
         prompt.focus()
         prompt.value = "/rules"
         await pilot.press("enter")

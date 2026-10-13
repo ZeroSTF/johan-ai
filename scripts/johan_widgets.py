@@ -201,3 +201,113 @@ class PlanCard(Vertical):
         self.choices.retire()
         self._title("[$text-muted]plan · replaced by the edited one below[/]")
         self.checklist.display = False
+
+
+# ================================================================ the prompt
+from textual.binding import Binding        # noqa: E402
+from textual.widgets import Input, TextArea  # noqa: E402
+
+
+class PromptArea(TextArea):
+    """The chat prompt: multi-line, but it behaves like the old one-line Input.
+
+    The Input it replaces is single-line by design: shift+enter did nothing
+    and a pasted multi-line block was collapsed onto one line. This keeps the
+    Input interface the app already uses everywhere (`value`,
+    `cursor_position`, `placeholder`, an `Input.Submitted` message) so no
+    call site had to change.
+
+      enter                    send
+      shift+enter / alt+enter  new line (shift+enter only if the terminal
+      ctrl+j                   reports it — WezTerm sends a plain enter for
+                               it unless its kitty keyboard mode is on;
+                               ctrl+j always works)
+      paste                    keeps the newlines
+      ↑ / ↓                    move between lines; on the first / last line
+                               they fall through to the app's history recall
+
+    TextArea's own ctrl+z (undo) and ctrl+y (redo) would shadow the app's
+    rewind and copy-last-answer while the prompt has focus, so they're
+    rebound to the app's actions; esc still stops a running turn.
+    """
+
+    BINDINGS = [
+        Binding("ctrl+z", "app.rewind", "rewind", show=False),
+        Binding("ctrl+y", "app.copy_last", "copy", show=False),
+        Binding("escape", "app.interrupt", "stop", show=False),
+    ]
+    NEWLINE_KEYS = ("shift+enter", "alt+enter", "ctrl+j")
+    MAX_LINES = 8
+
+    def __init__(self, placeholder="", id=None, suggester=None, **kw):
+        super().__init__("", id=id, soft_wrap=True, show_line_numbers=False,
+                         tab_behavior="focus", highlight_cursor_line=False,
+                         compact=True, placeholder=placeholder, **kw)
+        self.suggester = suggester
+        self._suggestion = ""
+
+    # --- the Input interface the app uses ---------------------------------
+    @property
+    def value(self):
+        return self.text
+
+    @value.setter
+    def value(self, text):
+        self.load_text(str(text or ""))
+        self.cursor_position = len(self.text)
+
+    @property
+    def cursor_position(self):
+        return self.document.get_index_from_location(self.cursor_location)
+
+    @cursor_position.setter
+    def cursor_position(self, index):
+        index = max(0, min(int(index), len(self.text)))
+        self.cursor_location = self.document.get_location_from_index(index)
+
+    # --- keys ---------------------------------------------------------------
+    async def _on_key(self, event):
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            self.post_message(Input.Submitted(self, self.text))
+            return
+        if event.key in self.NEWLINE_KEYS:
+            event.prevent_default()
+            event.stop()
+            self.insert("\n")
+            return
+        row = self.cursor_location[0]
+        last = self.document.line_count - 1
+        if (event.key == "up" and row == 0) or (event.key == "down" and row == last):
+            return          # let it bubble: the app recalls earlier questions
+        await super()._on_key(event)
+
+    async def _on_paste(self, event):
+        # Handled here, once. Left to bubble, the app forwarded the same
+        # paste back to the focused prompt and the block landed twice.
+        event.stop()
+        event.prevent_default()
+        await super()._on_paste(event)
+
+    def action_cursor_up(self, select=False):
+        if self.cursor_location[0] == 0 and not select:
+            return          # history recall handles it (the app's on_key)
+        super().action_cursor_up(select)
+
+    def action_cursor_down(self, select=False):
+        if self.cursor_location[0] == self.document.line_count - 1 and not select:
+            return
+        super().action_cursor_down(select)
+
+    # --- slash-command ghost suggestion ----------------------------------------
+    def on_text_area_changed(self, event):
+        lines = max(1, min(self.document.line_count, self.MAX_LINES))
+        self.styles.height = lines
+        text = self.text
+        hint = ""
+        if self.suggester is not None and text.startswith("/") and "\n" not in text:
+            hint = self.suggester.suggest_sync(text) or ""
+        self._suggestion = hint
+        self.suggestion = hint[len(text):] if hint.lower().startswith(text.lower()) and \
+            self.cursor_position == len(text) else ""
