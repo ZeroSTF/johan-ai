@@ -239,6 +239,7 @@ Just talk to me — I have the same tools as the desktop app.
 /tasks · /task `<text>` · /finish `<id>`
 /status — VRAM, services, disk
 /refresh — fetch new job postings, drop closed ones (~20 min)
+/uncensored · /normal — swap to the uncensored model and back
 /new — start a fresh conversation
 /help — this
 """
@@ -389,7 +390,27 @@ def cmd_status(bot, chat, arg):
 
 def cmd_new(bot, chat, arg):
     bot.histories.pop(chat, None)
+    if ja.is_uncensored():
+        ja.use_model(ja.NORMAL_MODEL)            # a new conversation starts normal
     bot.send(chat, "Fresh conversation. (Memories kept.)")
+
+
+def cmd_uncensored(bot, chat, arg):
+    """Swap the engine to the uncensored model; same tools and guards."""
+    if ja.is_uncensored():
+        return bot.send(chat, "Already uncensored — /normal switches back.")
+    if not ja.model_installed(ja.UNCENSORED_MODEL):
+        return bot.send(chat, f"The uncensored model ({ja.UNCENSORED_MODEL}) isn't installed.")
+    ja.use_model(ja.UNCENSORED_MODEL)
+    bot.send(chat, "Uncensored mode — same tools. The first answer takes ~15 s while it loads. "
+                   "/normal switches back; /new starts normal.")
+
+
+def cmd_normal(bot, chat, arg):
+    if not ja.is_uncensored():
+        return bot.send(chat, "Already in normal mode.")
+    ja.use_model(ja.NORMAL_MODEL)
+    bot.send(chat, "Back to normal mode.")
 
 
 def cmd_refresh(bot, chat, arg):
@@ -495,6 +516,7 @@ COMMANDS = {
     "task": cmd_task, "finish": cmd_finish, "status": cmd_status,
     "new": cmd_new, "help": cmd_help, "start": cmd_help, "refresh": cmd_refresh,
     "draw": cmd_draw, "forget": cmd_forget,
+    "uncensored": cmd_uncensored, "normal": cmd_normal,
 }
 
 

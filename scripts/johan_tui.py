@@ -138,13 +138,14 @@ PROMPT_HINT = "ask Johan anything  ·  / for commands"
 SLASH = ["/draw ", "/draw landscape ", "/draw square ", "/research ", "/review",
          "/refresh",
          "/retry", "/rewind", "/copy", "/new", "/history", "/jobs", "/images", "/edits", "/rules",
-         "/help", "/theme", "/forget "]
+         "/help", "/theme", "/forget ", "/uncensored", "/normal"]
 
 # Every name the app handles itself. A commands/<name>.md file with one of
 # these names is ignored: a built-in always wins.
 BUILTIN_SLASH = {"new", "history", "sessions", "jobs", "images", "edits", "help",
                  "review", "retry", "copy", "theme", "refresh", "draw", "research",
-                 "delete", "resume", "rewind", "undo", "rules", "forget"}
+                 "delete", "resume", "rewind", "undo", "rules", "forget",
+                 "uncensored", "normal"}
 
 
 def file_commands():
@@ -724,6 +725,7 @@ HELP_MD = """\
   made (one confirmation listing exactly what, and what can't be undone), and puts your
   question back in the box to edit
 - `/review` — Johan reviews its own mistakes; proposals go to Edits (F4)
+- `/uncensored` — swap to the uncensored model for this chat (same tools); `/normal` switches back, a new chat starts normal
 - `/refresh` — fetch new job postings, drop closed ones, rebuild the queue
   (~20 min in the background; `/refresh` again shows progress; `R` in Jobs)
 - `/new` — fresh chat · `/history` — past chats
@@ -1152,6 +1154,8 @@ class JohanCommands(Provider):
         ("Images", "images_tab", "everything Johan has drawn"),
         ("Changes", "edits_tab", "edits and machine changes waiting for approval"),
         ("Undo last change", "undo_change", "stages the undo of the last applied change"),
+        ("Uncensored mode", "uncensored", "swap to the uncensored model for this chat"),
+        ("Normal mode", "normal_model", "back to the normal model"),
         ("Always-allow rules", "list_rules", "changes that run without asking; /rules forget N"),
         ("Draw an image…", "start_draw", "puts /draw in the prompt"),
         ("Research something…", "start_research", "deep research, a few minutes"),
@@ -1489,8 +1493,10 @@ class JohanApp(App):
             used, ctx = u.get("prompt_tokens", 0), u.get("num_ctx") or 1
             pct = round(100 * used / ctx)
             colour = "$text-disabled" if pct < 60 else ("$warning" if pct < 85 else "$error")
+            label = "[b $warning]uncensored[/]" if ja.is_uncensored() else "$m"
             self.query_one("#statusr", Static).update(
-                f"{ja.MODEL}  ·  [{colour}]{used / 1000:.1f}k / {ctx // 1024}k context ({pct}%)[/]")
+                mk(f"{label}  ·  [{colour}]$u / $c context ($p%)[/]", m=ja.MODEL,
+                   u=f"{used / 1000:.1f}k", c=f"{ctx // 1024}k", p=str(pct)))
         except Exception:
             pass
 
@@ -1660,6 +1666,7 @@ class JohanApp(App):
             "/retry": self.action_retry, "/copy": self.action_copy_last,
             "/theme": self.action_cycle_theme, "/refresh": self.action_refresh_jobs,
             "/rewind": self.action_rewind, "/undo": self.action_rewind,
+            "/uncensored": self.action_uncensored, "/normal": self.action_normal_model,
         }
         if cmd in handlers:
             return handlers[cmd]()
@@ -1983,10 +1990,36 @@ class JohanApp(App):
         else:
             self.forget_images()
 
+    def action_uncensored(self):
+        """Swap the whole engine to the uncensored model for this chat. Same
+        tools, same code-level guards; only what the model will say changes."""
+        if self.busy:
+            return self._toast("still working — esc first")
+        if ja.is_uncensored():
+            return self._toast("already uncensored — /normal switches back")
+        if not ja.model_installed(ja.UNCENSORED_MODEL):
+            return self._note(f"the uncensored model ({ja.UNCENSORED_MODEL}) isn't installed", "err")
+        ja.use_model(ja.UNCENSORED_MODEL)
+        self._note("uncensored mode for this chat — same tools; /normal switches back", "ok")
+        self._status_right()
+        self.warm_up()            # load it now (~10-15 s), not on the next question
+
+    def action_normal_model(self):
+        if self.busy:
+            return self._toast("still working — esc first")
+        if not ja.is_uncensored():
+            return self._toast("already in normal mode")
+        ja.use_model(ja.NORMAL_MODEL)
+        self._note("back to normal mode", "ok")
+        self._status_right()
+        self.warm_up()
+
     def action_new_chat(self):
         if self.busy:
             return self._toast("still working — esc first")
         ja.LAST_USAGE.update(prompt_tokens=0, completion_tokens=0)
+        if ja.is_uncensored():
+            ja.use_model(ja.NORMAL_MODEL)     # a new chat always starts normal
         ja.new_session()
         self.query_one("#main", TabbedContent).active = "tab-chat"
         self._fresh()

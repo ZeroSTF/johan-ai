@@ -64,6 +64,32 @@ TOOL_CHAR_CAPS = {"fetch_page": 4000}
 OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"
 # JOHAN_MODEL lets the evals score another model through the same code path.
 MODEL = os.environ.get("JOHAN_MODEL", "johan-agent")
+NORMAL_MODEL = MODEL
+# /uncensored swaps the WHOLE engine to this model — chat, decide checks, plan,
+# the answer check, learning — never a mix: with one 6 GB card and
+# MAX_LOADED_MODELS=1, alternating models per call would reload one every few
+# seconds. Every code-level guard (shell allowlist, F4 approval, sandbox,
+# image refusals) is independent of the model and stays on.
+UNCENSORED_MODEL = os.environ.get("JOHAN_UNCENSORED_MODEL", "johan-uncensored")
+
+
+def use_model(name):
+    """Switch the model every engine call uses from now on."""
+    global MODEL
+    MODEL = name
+
+
+def is_uncensored():
+    return MODEL == UNCENSORED_MODEL
+
+
+def model_installed(name):
+    try:
+        tags = requests.get("http://127.0.0.1:11434/api/tags", timeout=5).json()
+        return any(m.get("name", "").split(":")[0] == name.split(":")[0]
+                   for m in tags.get("models", []))
+    except requests.RequestException:
+        return False
 EMBED_URL = "http://127.0.0.1:8100/embed"
 QDRANT_HOST, QDRANT_PORT = "127.0.0.1", 6333
 SESSION_LOG_DIR = ROOT / "brain/inbox"
