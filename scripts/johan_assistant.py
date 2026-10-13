@@ -785,6 +785,14 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
             if msg.get("content"):
                 messages.append(msg)
             return msg.get("content", "") or "(interrupted)"
+        if last and (msg.get("tool_calls") or not (msg.get("content") or "").strip()):
+            # Leaving `tools` out does NOT stop this model calling them:
+            # Ollama's parser lifts tool calls out of the raw output either
+            # way (tool_calls rows at hop 8 — the tools-off hop — existed in
+            # real use). Those calls were then EXECUTED on a hop that offered
+            # no tools. Never execute them; insist once, then fall back to a
+            # summary built in code, so this hop always yields an answer.
+            return _final_answer(messages, on_delta, should_stop)
         messages.append(msg)
         calls = msg.get("tool_calls") or []
         if not calls:
@@ -802,8 +810,47 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
             text = _plan.render_ask(asked)
             messages.append({"role": "assistant", "content": text})
             return text
-    return ("(no answer — the model kept calling tools and never summarised. "
-            "This should be unreachable: the final hop disables tools.)")
+    # Unreachable by construction: the final hop above always returns.
+    return _final_answer(messages, on_delta, should_stop)
+
+
+FINAL_NUDGE = ("[note from Johan's runtime, not Riadh] No more tools are "
+               "available this turn. Answer him now in plain text from what the "
+               "tool results above show; say plainly what you couldn't finish.")
+
+
+def _final_answer(messages, on_delta=None, should_stop=None):
+    """A text answer for the turn's last hop, guaranteed: one tools-off retry
+    with an explicit instruction (not kept in history), then a summary of
+    the tool results written by code."""
+    msg = call_model(messages + [{"role": "user", "content": FINAL_NUDGE}],
+                     on_delta=on_delta, no_tools=True, should_stop=should_stop)
+    text = (msg.get("content") or "").strip()
+    if msg.pop("interrupted", False):
+        return text or "(interrupted)"
+    if not text or msg.get("tool_calls"):
+        text = _summary_of_tools(messages)
+    messages.append({"role": "assistant", "content": text})
+    return text
+
+
+def _summary_of_tools(messages):
+    """Last resort, no model: what ran this turn and what came back."""
+    start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=0)
+    names = {}
+    for m in messages[start:]:
+        for c in m.get("tool_calls") or []:
+            n = (c.get("function") or {}).get("name", "?")
+            names[n] = names.get(n, 0) + 1
+    lines = []
+    for m in messages[start:]:
+        if m.get("role") == "tool":
+            out = " ".join(str(m.get("content") or "").split())[:160]
+            if out:
+                lines.append(f"- {out}")
+    ran = ", ".join(f"{n} ×{k}" if k > 1 else n for n, k in names.items()) or "nothing"
+    return ("I ran out of steps before writing this up properly. I ran: "
+            f"{ran}. The last results were:\n" + "\n".join(lines[-4:] or ["- (none)"]))
 
 
 SESSION_FILE = ROOT / "brain/last-session.json"
