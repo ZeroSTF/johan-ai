@@ -58,10 +58,10 @@ def draw_checks():
     tg.Bot.send_photo = lambda self, chat, path, caption="": self.calls.append(
         ("sendPhoto", {"caption": caption})) or True
     try:
-        results["parse: modifiers either order"] = (
-            tg.parse_draw("landscape real a red fox in snow")
-            == ("landscape", "real", None, "a red fox in snow")
-            and tg.parse_draw("real landscape a red fox")[:2] == ("landscape", "real"))
+        results["parse: shape and strength, either order"] = (
+            tg.parse_draw("landscape 0.4 a red fox in snow")
+            == ("landscape", "anime", 0.4, "a red fox in snow")
+            and tg.parse_draw("0.4 landscape a red fox")[:3] == ("landscape", "anime", 0.4))
         results["parse: strength, and a number in the text stays text"] = (
             tg.parse_draw("0.4 at night")[2:] == (0.4, "at night")
             and tg.parse_draw("3 cats on a sofa") == (None, "anime", None, "3 cats on a sofa"))
@@ -77,10 +77,10 @@ def draw_checks():
         tg.handle_update(bot, update(STRANGER, "/draw a castle"))
         results["/draw from a stranger draws nothing"] = not drawn
 
-        tg.handle_update(bot, update(ME, "/draw real landscape a castle at dusk"))
+        tg.handle_update(bot, update(ME, "/draw landscape a castle at dusk"))
         results["/draw draws, with style and size"] = drawn[-1:] == [(
             "a castle at dusk", {"size": "landscape", "reference": None,
-                                 "strength": None, "style": "real"})]
+                                 "strength": None, "style": "anime"})]
         results["…and sends the picture"] = any(m == "sendPhoto" for m, _ in bot.calls)
         results["…and frees the slot"] = not bot.drawing
 

@@ -142,17 +142,16 @@ in the input box to edit and resend.
 ```
 /draw a knight in black armor, neon city at night, rain
 /draw landscape cozy cabin in the snow
-/draw real an old fisherman mending nets at dawn
 ```
 
-- Default style is **anime/illustration**; add **`real`** for photorealistic.
+- Anime/illustration style, written as short comma-separated tags.
 - Add **`landscape`** or **`square`** for the shape (portrait by default).
 - Or just ask in chat: "draw me a cat astronaut".
 - About 30–60 s per image. The chat model steps out of the GPU while it draws.
 
 **Redraw a picture:**
 ```
-/draw real ~/Pictures/photo.jpg 0.6 make it golden hour
+/draw ~/Pictures/photo.jpg 0.6 golden hour, warm light
 ```
 Drag a file into the terminal to paste its path. The number (0.2–0.95,
 default 0.6) is how much changes: 0.3 keeps it almost the same, 0.7+ for big
@@ -192,7 +191,7 @@ The same assistant from my phone (only my account can use it):
 |---|---|
 | just type | chat, with all the same tools |
 | `/jobs`, `/cv <id>`, `/applied <id>`, `/done` | the job queue |
-| `/draw [real] [landscape] …` | draw; send a photo with a `/draw …` caption to redraw it |
+| `/draw [landscape] …` | draw; send a photo with a `/draw …` caption to redraw it |
 | `/remember`, `/memory`, `/forget <id>` | memory |
 | `/tasks`, `/task <text>`, `/finish <id>` | tasks |
 | `/status`, `/refresh`, `/new`, `/help` | |

@@ -2,8 +2,7 @@
 
 Engine: ComfyUI (~/johan/comfyui, its own venv ~/johan/venv-comfy) running
 WAI-NSFW-Illustrious v14 (SDXL, anime/illustration) with the DMD2 4-step
-LoRA and the fp16-fixed SDXL VAE. Riadh chose illustration over photoreal
-(2026-10-03), so only that model was downloaded.
+LoRA and the fp16-fixed SDXL VAE.
 
 The GPU cannot hold the chat model (~4.7 GB) and an SDXL UNet (~5.1 GB fp16)
 at once, so every generation is a handoff:
@@ -53,9 +52,8 @@ CLIP_G = "wai_illustrious_v14_clip_g.safetensors"
 VAE = "sdxl_vae_fp16_fix.safetensors"
 LORA = "dmd2_sdxl_4step_lora.safetensors"
 
-# Two models, same SDXL plumbing (same VAE, same DMD2 4-step LoRA). "anime"
-# writes danbooru tags; "real" (RealVisXL V5.0, SG161222 on Hugging Face,
-# SHA-256 checked on download, added 2026-10-06) takes plain English.
+# One model. `STYLES` stays a table so another can be added later without
+# touching the workflow code.
 STYLES = {
     "anime": {
         "unet": UNET, "clip_l": CLIP_L, "clip_g": CLIP_G,
@@ -63,20 +61,6 @@ STYLES = {
         "quality": "masterpiece, best quality, amazing quality, very aesthetic, absurdres",
         "negative": ("bad quality, worst quality, worst detail, sketch, censor, "
                      "lowres, bad anatomy, bad hands, extra fingers, watermark, signature"),
-    },
-    "real": {
-        "unet": "realvis_v5_unet.safetensors",
-        "clip_l": "realvis_v5_clip_l.safetensors",
-        "clip_g": "realvis_v5_clip_g.safetensors",
-        # CFG 1 (DMD2's default) gives the prompt the least possible pull and
-        # ignores the negative entirely; the anime model copes because it was
-        # trained on exact tags, this one drifted from what he typed. 1.5 adds
-        # real guidance at ~2x the time per step (2026-10-11, untested A/B).
-        "cfg": 1.5,
-        "quality": "RAW photo, photorealistic, natural skin texture, detailed, sharp focus",
-        "negative": ("worst quality, low quality, illustration, 3d, 2d, painting, cartoon, "
-                     "anime, sketch, deformed, bad anatomy, bad hands, extra fingers, "
-                     "watermark, text, signature"),
     },
 }
 
@@ -272,7 +256,7 @@ def _workflow(positive, negative, width, height, seed, steps, ref=None, strength
         "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": negative}},
         "7": {"class_type": "EmptyLatentImage",
               "inputs": {"width": width, "height": height, "batch_size": 1}},
-        # DMD2's recipe: LCM sampler, sgm_uniform schedule, CFG 1 (per style).
+        # DMD2's recipe: LCM sampler, sgm_uniform schedule, CFG 1.
         "8": {"class_type": "KSampler",
               "inputs": {"model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0],
                          "latent_image": ["7", 0], "seed": seed, "steps": steps,
@@ -308,11 +292,9 @@ def generate_image(prompt, size=None, seed=None, on_progress=None,
         return {"error": reason}
     if not PY.exists() or not (COMFY / "main.py").exists():
         return {"error": "image engine not installed (~/johan/comfyui)"}
-    style = (style or "anime").lower()
-    style = {"realistic": "real", "photo": "real", "photorealistic": "real",
-             "illustration": "anime"}.get(style, style)
-    if style not in STYLES:
-        return {"error": f"unknown style '{style}' — use anime or real"}
+    # `style` is still accepted (older chats and image sidecars pass it), but
+    # there is one model now.
+    style = "anime"
     model = STYLES[style]
     missing = [f for d, f in (("diffusion_models", model["unet"]),
                               ("text_encoders", model["clip_l"]),
@@ -320,9 +302,7 @@ def generate_image(prompt, size=None, seed=None, on_progress=None,
                               ("vae", VAE), ("loras", LORA))
                if not (COMFY / "models" / d / f).exists()]
     if missing:
-        return {"error": f"image model files missing: {', '.join(missing)}"
-                         + (" (the realistic model may still be downloading)"
-                            if style == "real" else "")}
+        return {"error": f"image model files missing: {', '.join(missing)}"}
     ref_img = ref_path = None
     if reference:
         ref_img, ref_path = _reference(reference, prompt)
@@ -440,14 +420,12 @@ TOOL = {"type": "function", "function": {
     # "silver hair, red eyes" into a request for a knight in black armor.
     # A small model copies examples literally — describe the format instead.
     "description": (
-        "Draw a picture on his GPU (uncensored, ~40 s). style 'anime' (default): "
+        "Draw a picture on his GPU (uncensored, ~40 s, anime/illustration). "
         "`prompt` is danbooru tags — subject/count (1girl, no humans…) then ONLY "
-        "the details he gave; add nothing he didn't ask for. style 'real' (photo, "
-        "realistic): a short plain description. A picture he points at goes in "
+        "the details he gave; add nothing he didn't ask for. A picture he points at goes in "
         "`reference` to redraw it. Tell him where it saved; ctrl+o opens it."),
     "parameters": {"type": "object", "properties": {
         "prompt": {"type": "string"},
-        "style": {"type": "string", "enum": ["anime", "real"]},
         "size": {"type": "string", "enum": ["portrait", "landscape", "square"]},
         "reference": {"type": "string"},
         "strength": {"type": "number", "description": "redraw: 0.3 small tweak … 0.9 keep only layout"},

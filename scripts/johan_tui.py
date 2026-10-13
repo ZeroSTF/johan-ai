@@ -135,7 +135,7 @@ def _fixed_muted(theme):
 
 PROMPT_HINT = "ask Johan anything  ·  / for commands"
 
-SLASH = ["/draw ", "/draw real ", "/draw landscape ", "/draw square ", "/research ", "/review",
+SLASH = ["/draw ", "/draw landscape ", "/draw square ", "/research ", "/review",
          "/refresh",
          "/retry", "/rewind", "/copy", "/new", "/history", "/jobs", "/images", "/edits", "/rules",
          "/help", "/theme", "/forget "]
@@ -710,13 +710,11 @@ HELP_MD = """\
 - `what's using my GPU?` · `check my tf2 config` · `how much disk is free?`
 - `research the best budget GPU for local AI properly` — a few minutes, cited
 - `draw a girl with silver hair on a rooftop at night` — or `/draw` with tags
-- `a realistic photo of a lighthouse in a storm` — photorealistic
 - `remember I prefer Postgres` · `what do you know about me?`
 - `use python to …` — runs in a locked sandbox
 
 ### Commands — type `/`, then tab completes
 - `/draw <tags>` — draw now (anime); put `landscape` or `square` first to change shape
-- `/draw real <description>` — photorealistic, in plain English
 - `/draw ~/pic.png <tags>` — redraw a picture; `/draw ~/pic.png 0.3 <tags>` changes
   it less, `0.9` more (default 0.6). Drag a file into the terminal to paste its path.
   In Images (F5), `i` starts a redraw of the selected one
@@ -1887,13 +1885,9 @@ class JohanApp(App):
         """/draw [landscape|square|portrait] [picture-path [strength]] tags"""
         shown = arg
         size, style = None, "anime"
-        for _ in range(2):                  # "real landscape …" or "landscape real …"
-            first = arg.split(" ", 1)[0].lower()
-            rest = arg.split(" ", 1)[1] if " " in arg else ""
-            if first in ("landscape", "square", "portrait"):
-                size, arg = first, rest
-            elif first in ("real", "realistic", "photo", "anime"):
-                style, arg = ("anime" if first == "anime" else "real"), rest
+        first = arg.split(" ", 1)[0].lower()
+        if first in ("landscape", "square", "portrait"):
+            size, arg = first, (arg.split(" ", 1)[1] if " " in arg else "")
         ref, strength, arg = _split_reference(arg)
         if not arg:
             return self._note("what should I draw? — /draw [picture] tags", "err")
@@ -2388,8 +2382,7 @@ class JohanApp(App):
         if not r:
             return
         box = self.query_one("#prompt")
-        real = "real " if r.get("style") == "real" else ""
-        box.value = f"/draw {real}{r.get('prompt', '')}"
+        box.value = f"/draw {r.get('prompt', '')}"
         box.cursor_position = len(box.value)
         box.focus()
 
@@ -2403,7 +2396,7 @@ class JohanApp(App):
         self.turn = self._chat().add(Turn())
         self._start_busy("drawing a variation")
         self.draw_worker(r.get("prompt", ""), r.get("size", "portrait"), None,
-                         r.get("reference"), r.get("strength"), r.get("style", "anime"))
+                         r.get("reference"), r.get("strength"))
 
     def action_redraw_image(self):
         """Use the selected picture as the starting point for a new one."""
@@ -2412,8 +2405,7 @@ class JohanApp(App):
             return
         self.query_one("#main", TabbedContent).active = "tab-chat"
         box = self.query_one("#prompt")
-        real = "real " if r.get("style") == "real" else ""
-        box.value = f"/draw {real}{_quote_path(r['path'])} "
+        box.value = f"/draw {_quote_path(r['path'])} "
         box.cursor_position = len(box.value)
         box.focus()
         self._toast("type what to change, e.g. “night, rain” — add 0.3 after the "

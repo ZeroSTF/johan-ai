@@ -233,7 +233,7 @@ Just talk to me — I have the same tools as the desktop app.
 /done — what you've applied to
 
 *Assistant*
-/draw `[real] [landscape|square] <description>` — draw now (anime unless `real`); send a photo with `/draw 0.4 <changes>` as its caption to redraw it
+/draw `[landscape|square] <description>` — draw now; send a photo with `/draw 0.4 <changes>` as its caption to redraw it
 /remember `<text>` — keep a fact about you
 /memory — what I know about you
 /tasks · /task `<text>` · /finish `<id>`
@@ -418,17 +418,16 @@ def cmd_refresh(bot, chat, arg):
 
 
 def parse_draw(arg):
-    """/draw [real|anime] [landscape|square|portrait] [0.x strength] text —
-    the desktop's /draw grammar, either modifier order."""
+    """/draw [landscape|square|portrait] [0.x strength] text — the desktop's
+    /draw grammar, either modifier order. Returns (size, style, strength, text);
+    style is always "anime" (the only model)."""
     size, style, strength = None, "anime", None
     arg = arg.strip()
-    for _ in range(3):
+    for _ in range(2):
         first, _, rest = arg.partition(" ")
         word = first.lower()
         if word in ("landscape", "square", "portrait"):
             size, arg = word, rest.strip()
-        elif word in ("real", "realistic", "photo", "anime"):
-            style, arg = ("anime" if word == "anime" else "real"), rest.strip()
         else:
             try:
                 val = float(first)
@@ -447,7 +446,7 @@ def cmd_draw(bot, chat, arg):
     import threading
     size, style, strength, prompt = parse_draw(arg)
     if not prompt:
-        bot.send(chat, "What should I draw? `/draw [real] [landscape] <description>`"
+        bot.send(chat, "What should I draw? `/draw [landscape] <description>`"
                  + (" — your picture is kept for it." if chat in bot.pending_ref else ""))
         return
     if not ollama_up():
@@ -459,7 +458,7 @@ def cmd_draw(bot, chat, arg):
         return
     ref = bot.pending_ref.pop(chat, None)
     bot.drawing = True
-    what = f"{'redrawing your picture' if ref else 'drawing'} ({style}, {size or 'portrait'})"
+    what = f"{'redrawing your picture' if ref else 'drawing'} ({size or 'portrait'})"
     bot.send(chat, f"{what[0].upper()}{what[1:]} — about 40 s.")
 
     def work():
