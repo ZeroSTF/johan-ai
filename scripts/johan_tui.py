@@ -446,6 +446,10 @@ class Turn(Vertical):
             self.activity.title = (f"{len(self.steps)} step{'s' * (len(self.steps) > 1)} · "
                                    f"{summary}" + (f" · {fails} failed" if fails else ""))
         bits = [f"{secs:.1f}s"]
+        if ja.LAST_CORRECTED:
+            # The answer check rewrote what streamed in — say so, so text
+            # doesn't change under him without a reason.
+            bits.append("[$warning]corrected after a fact check[/]")
         if interrupted:
             bits.append("[$warning]stopped[/]")
         self.meta.update(f"[$text-disabled]johan · {_hm()} · {' · '.join(bits)}[/]")

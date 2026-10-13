@@ -66,9 +66,10 @@ ANSWER_PROMPT = (
     "and direct.")
 
 FIX_PROMPT = (
-    "[Johan, internal] Check that answer against the tool results above. "
-    "Rewrite it so it states only facts and numbers that appear in those "
-    "results, exactly as they appear, and says plainly what was not found. "
+    "[Johan, internal] Check that answer against the tool results and what "
+    "I said earlier in this chat. Rewrite it so it states only facts and "
+    "numbers that appear there, exactly as they appear, and says plainly what "
+    "was not found. Keep my language and your normal tone. "
     "Reply with the corrected answer only.")
 
 _ANSWER_STEP = re.compile(r"\b(answer|respond|reply|summari[sz]e|tell (him|riadh|me|the user)|report)\b", re.I)
@@ -117,6 +118,10 @@ def _verify_and_fix(messages, start, answer, should_stop=None):
     if not answer or not evidence or (should_stop and should_stop()):
         return answer
     try:
+        # Measured 2026-10-13: asking "backed by the tool result OR what he
+        # said" stopped false rewrites of chat-sourced facts but lost two real
+        # catches (90% -> 80% on eval_decide supported). Kept tool-only; the
+        # UI now SAYS when an answer was corrected instead of silently swapping.
         _, d = jd.check(jd.SUPPORT_Q, f"Tool result: {evidence}\nAnswer: {answer}",
                         yes=jd.SUPPORT_OPTS["yes"], no=jd.SUPPORT_OPTS["no"],
                         kind="supported", null_context=jd.NULLS["supported"])
@@ -133,6 +138,7 @@ def _verify_and_fix(messages, start, answer, should_stop=None):
         return answer
     jd.log_rewrite(answer, fixed, d, f"Tool result: {evidence}")
     messages[-1] = {"role": "assistant", "content": fixed}
+    ja.LAST_CORRECTED[:] = [True]      # the UIs say so instead of silently swapping text
     return fixed
 
 

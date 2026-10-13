@@ -666,6 +666,8 @@ def run_chat_turn(bot, chat, progress=None):
         return
 
     final = head() + (reply or state["buf"] or "(no answer)").strip()
+    if ja.LAST_CORRECTED:
+        final += "\n\n_(corrected after a fact check)_"
     for r in ja.LAST_LEARNED:                    # a correction became a rule
         final += f"\n\n_learned: {r['text']} — /forget {r['memory_id']} to undo_"
 

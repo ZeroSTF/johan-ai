@@ -710,6 +710,10 @@ def _maybe_research(q, on_tool, on_delta, should_stop):
 LAST_LEARNED = []
 
 
+# Set when the answer check rewrote this turn's answer; the UIs say so.
+LAST_CORRECTED = []
+
+
 def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
              should_stop=None):
     """Answer one user turn. Dispatches to the configured engine.
@@ -727,6 +731,7 @@ def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
 def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
     import johan_steps
     LAST_LEARNED[:] = []
+    LAST_CORRECTED[:] = []
     if ENGINE == "steps":
         return johan_steps.run_turn_steps(messages, max_hops=max_hops,
                                           on_tool=on_tool, on_delta=on_delta,
