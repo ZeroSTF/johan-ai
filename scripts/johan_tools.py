@@ -1209,6 +1209,7 @@ def run_command(command, timeout=20):
     output = "\n".join(chunks)
     TERMINAL_DIR.mkdir(parents=True, exist_ok=True)
     (TERMINAL_DIR / "last.txt").write_text(output)
+    (TERMINAL_DIR / "last.cmd").write_text(" ; ".join(ran))
 
     lines = output.splitlines()
     head, page, pages = _page_of(lines, 1)
@@ -1230,7 +1231,11 @@ def read_output(page=2):
         return {"error": "no command has been run yet"}
     lines = path.read_text().splitlines()
     text, page, pages = _page_of(lines, page or 2)
-    return {"page": page, "pages": pages, "lines": len(lines),
+    try:      # one shared file: say which command this page belongs to
+        cmd = (TERMINAL_DIR / "last.cmd").read_text()
+    except OSError:
+        cmd = ""
+    return {"command": cmd, "page": page, "pages": pages, "lines": len(lines),
             "output": text,
             "more": (f"call run_command(page={page + 1})"
                      if page < pages else "this is the last page")}
@@ -1996,6 +2001,12 @@ def run_command_tool(command=None, page=None, timeout=20, why=None):
             head = out["output"][:1000]
             out["output"] = head[:head.rfind("\n")] if "\n" in head else head
             out["relevant_later_lines"] = rel
+            shown = len(out["output"].splitlines())
+            if shown < first:
+                # Lines shown..first were on no page at all: page 2 starts
+                # after the FULL page 1. Say where to get them.
+                out["more"] = (f"page 1 is cut to {shown} of its {first} lines to fit the "
+                               f"matches below; run_command(page=1) shows all of it. " + out.get("more", ""))
     return out
 
 
