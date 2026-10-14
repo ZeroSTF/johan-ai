@@ -579,7 +579,10 @@ def log_tool_call(session_id, user_message, hop, tool, args, ok, error,
 
 def _last_user_message(messages):
     for m in reversed(messages):
-        if m.get("role") == "user":       # his words, not an attached picture's path note
+        # his words: not an attached picture's path note, and not the plan
+        # layer's "[Johan, internal] Plan approved. Do it now" (skills then
+        # matched on "it" in that boilerplate)
+        if m.get("role") == "user" and not str(m.get("content", "")).startswith("[Johan, internal]"):
             return _attach.shown_text(m.get("content", ""))
     return ""
 
@@ -592,13 +595,27 @@ def _last_user_message(messages):
 TRIVIAL = {
     "hi", "hii", "hey", "hello", "yo", "sup", "hiya", "howdy",
     "good morning", "good evening", "good afternoon", "morning",
-    "thanks", "thank you", "thx", "ty", "cheers", "nice", "cool", "great",
-    "ok", "okay", "k", "kk", "got it", "understood", "sure", "yes", "no",
+    "thanks", "thank you", "thx", "ty", "cheers",
     "bye", "goodbye", "cya", "see you", "gn", "good night", "lol", "haha",
+    "salut", "bonjour", "bonsoir", "merci",
 }
+# Acknowledgements are small talk only when Johan didn't just offer or ask
+# something: "yes" to "want me to install htop?" is a go-ahead, and the gate
+# used to strip every tool from that turn.
+ACKS = {"nice", "cool", "great", "ok", "okay", "k", "kk", "got it", "understood",
+        "sure", "yes", "no", "yep", "yeah", "nope", "oui", "non", "d'accord", "go", "do it"}
 
 
-def _is_trivial(message):
+RETRYABLE = {"web_search", "fetch_page", "find_images", "wikipedia", "latest_version"}
+CHANGES_STATE = {"propose_action", "propose_edit", "applied", "tasks", "scratchpad"}
+
+
+def _changes_state(name, args):
+    return name in CHANGES_STATE or (name == "files" and args.get("content") is not None) \
+        or (name == "memory" and (args.get("text") or args.get("forget_id")))
+
+
+def _is_trivial(message, messages=None):
     """True when the whole message is a greeting or acknowledgement.
 
     Six separate prompt edits failed to stop a 4B model calling a tool on
@@ -606,7 +623,13 @@ def _is_trivial(message):
     to literally `run_command("echo 'Hi there!'")`, using the shell to
     speak. Prose cannot suppress it; taking the tools away can."""
     norm = (message or "").strip().lower().strip(".!?,;:â€¦ ").strip()
-    return norm in TRIVIAL
+    if norm in TRIVIAL:
+        return True
+    if norm not in ACKS:
+        return False
+    prev = next((m.get("content") or "" for m in reversed(messages or [])
+                 if m.get("role") == "assistant" and m.get("content")), "")
+    return not prev.rstrip().endswith("?")
 
 
 # Tools that run for minutes take the turn's stop signal, so esc works while
@@ -632,6 +655,11 @@ def execute_tool(call, seen, hop, user_message, should_stop=None):
     # ("do not retry this") is not enough — it has to be enforced here.
     sig = (name, json.dumps(args, sort_keys=True, default=str))
     repeat = seen.get(sig)
+    # The web fails for a minute at a time (engines refusing): one retry of
+    # the same call is allowed, not refused as "will fail again".
+    if repeat is not None and not repeat[0] and name in RETRYABLE and (sig, "retry") not in seen:
+        seen[(sig, "retry")] = True
+        repeat = None
     if repeat is not None:
         prev_ok, prev_err = repeat
         if prev_ok:
@@ -671,6 +699,11 @@ def execute_tool(call, seen, hop, user_message, should_stop=None):
     err = result.get("error") if isinstance(result, dict) else None
     if repeat is None:
         seen[sig] = (not err, str(err)[:160] if err else None)
+        if not err and _changes_state(name, args):
+            # After a change, an earlier read is stale: re-checking
+            # `gsettings get` after the change must really run again.
+            for k in [k for k, v in seen.items() if isinstance(v, tuple) and v[0] and k != sig]:
+                del seen[k]
     log_tool_call(SESSION_ID, user_message, hop, name, args,
                   ok=not err, error=str(err)[:500] if err else None,
                   duration_ms=int((time.monotonic() - started) * 1000),
@@ -808,7 +841,7 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
     elif report is not None:
         messages.append({"role": "assistant", "content": report})
         return report
-    if not _is_trivial(q):
+    if not _is_trivial(q, messages):
         _skills.inject(messages, q)        # a matching recipe from skills/, before his message
     answer = run_turn_loop(messages, max_hops=max_hops, on_tool=on_tool,
                            on_delta=on_delta, should_stop=should_stop)
@@ -818,7 +851,7 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
         return answer          # a question to him, not facts to verify
     # Small talk ending "code or game?" is conversation, not an ambiguous
     # request — re-asking it as options turned "good morning" into a menu.
-    if answer and not answer.startswith("(interrupted") and not _is_trivial(q) \
+    if answer and not answer.startswith("(interrupted") and not _is_trivial(q, messages) \
             and not ANSWERED_BY_CODE:
         seen = {}
         asked = _plan.reask_as_tool(
@@ -867,7 +900,7 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
         # A greeting gets no tools at all, not a request to please not use
         # them. Only the first hop: if a later hop somehow gets here the
         # conversation is no longer trivial.
-        quiet = last or (hop == 0 and _is_trivial(user_message))
+        quiet = last or (hop == 0 and _is_trivial(user_message, messages))
         msg = call_model(messages, on_delta=on_delta, no_tools=quiet,
                          should_stop=should_stop, tools=tools)
         if msg.pop("interrupted", False):

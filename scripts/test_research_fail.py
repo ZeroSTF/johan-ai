@@ -90,6 +90,43 @@ check("the prompt never names tools that no longer exist",
       "scratchpad_clear" not in ja.prime_with_memories(ja.SYSTEM_PROMPT)
       and "scratchpad_write" not in ja.prime_with_memories(ja.SYSTEM_PROMPT))
 
+# A bare "yes" to an offer is a go-ahead, not small talk (the gate stripped all tools).
+offer = [{"role": "assistant", "content": "I can install htop for you — want me to?"}]
+check("'yes' after an offer keeps the tools", not ja._is_trivial("yes", offer))
+check("'ok' after a statement is still small talk", ja._is_trivial("ok", [{"role": "assistant",
+                                                                          "content": "Done."}]))
+check("'hi' is always small talk", ja._is_trivial("hi", offer))
+check("the plan layer's internal go-ahead is not his message",
+      ja._last_user_message([{"role": "user", "content": "back up my Documents"},
+                             {"role": "user", "content": "[Johan, internal] Plan approved. Do it now"}])
+      == "back up my Documents")
+
+# Repeat guard: reads go stale after a change; a failed web call gets one retry.
+calls = []
+real_d = dict(ja.DISPATCH)
+ja.DISPATCH.update(run_command=lambda **a: calls.append("read") or {"output": "prefer-light"},
+                   propose_action=lambda **a: calls.append("change") or {"ran": True},
+                   web_search=lambda **a: calls.append("web") or {"error": "engines refusing"})
+real_log = ja.log_tool_call
+ja.log_tool_call = lambda *a, **k: None
+try:
+    seen = {}
+    c = lambda n, **a: {"function": {"name": n, "arguments": a}}
+    ja.execute_tool(c("run_command", command="gsettings get x"), seen, 0, "q")
+    ja.execute_tool(c("propose_action", commands="gsettings set x"), seen, 0, "q")
+    ja.execute_tool(c("run_command", command="gsettings get x"), seen, 0, "q")
+    check("after a change the same read really runs again", calls == ["read", "change", "read"])
+    calls.clear()
+    for _ in range(3):
+        ja.execute_tool(c("web_search", query="x"), seen, 0, "q")
+    check("a failed web search gets ONE retry, not endless", calls == ["web", "web"])
+    calls.clear()
+    ja.execute_tool(c("run_command", command="ls a"), seen, 0, "q")
+    ja.execute_tool(c("run_command", command="ls a"), seen, 0, "q")
+    check("an identical read with no change between is still refused", calls == ["read"])
+finally:
+    ja.DISPATCH.clear(); ja.DISPATCH.update(real_d); ja.log_tool_call = real_log
+
 for k, ok in results.items():
     print(f"{'ok  ' if ok else 'FAIL'}  {k}")
 bad = [k for k, ok in results.items() if not ok]

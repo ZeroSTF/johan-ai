@@ -181,7 +181,7 @@ def run_turn_steps(messages, max_hops=9, on_tool=None, on_delta=None,
     start = len(messages)
 
     # Greetings: the loop already answers them with no tools at all.
-    if ja._is_trivial(q) or not _is_multi_step(q):
+    if ja._is_trivial(q, messages) or not _is_multi_step(q):
         answer = ja.run_turn_loop(messages, max_hops=max_hops, on_tool=on_tool,
                                   on_delta=on_delta, should_stop=should_stop)
         if answer and not answer.startswith("(interrupted"):

@@ -157,7 +157,8 @@ def match(message, threshold=None, embed=None):
 # matched free-disk-space (0.72) on its own words and Johan went off running
 # du on his home folder. A message that points back has no topic of its own:
 # it is matched together with his previous message (-> game-config, 0.65).
-BACK_REF = re.compile(r"\b(it|its|this|that|these|those|them|there)\b", re.I)
+# ("there" was dropped: "is there any space left?" is a new topic.)
+BACK_REF = re.compile(r"\b(it|its|this|that|these|those|them|ça|ca|cela|celui|celle|ceux)\b", re.I)
 
 
 def _match_text(messages, message):
