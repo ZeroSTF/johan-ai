@@ -73,6 +73,113 @@ def refuse_reason(prompt):
 
 REF_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 DEFAULT_STRENGTH = 0.6
+# How a redraw uses its reference (measured 2026-10-14 on an anime figure and
+# a real photo, outputs compared side by side):
+#   lines     — edges via ControlNet, everything else redrawn from scratch.
+#               "night, neon city" on a white-background figure gave a full
+#               rainy street with her pose and outfit kept; a photo came out
+#               clean anime. Default.
+#   look      — classic img2img at `strength`. Keeps colours and layout; at
+#               0.6 it ignored "night, city" entirely. Small touch-ups only.
+#   character — IP-Adapter: who/what style it is, not where the lines are.
+KEEP_MODES = ("lines", "look", "character")
+CONTROLNET = "control-lora-canny-rank128.safetensors"
+CONTROL_STRENGTH = 0.8
+IPADAPTER = "ip-adapter-plus_sdxl_vit-h.safetensors"
+CLIP_VISION = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+IPADAPTER_WEIGHT = 0.7
+
+# ---- reading the reference into tags (WD tagger, CPU, its own process)
+TAGGER = ROOT / "scripts/tag_image.py"
+TAGGER_MODEL = COMFY / "models/tagger/wd-vit-tagger-v3.onnx"
+REF_TAGS_MAX = 24
+# Tags that describe the picture as a file, not its content.
+_REF_SKIP = {"general", "sensitive", "questionable", "explicit", "monochrome", "greyscale", "comic", "translated",
+             "english text", "text focus", "watermark", "signature", "artist name",
+             "web address", "twitter username", "patreon username", "jpeg artifacts",
+             "realistic", "photorealistic", "photo (medium)", "photo background", "3d",
+             # a 448px tagger's guess at ethnicity was wrong on the first photo
+             # tried, and the redraw followed it
+             "asian", "dark-skinned male", "dark-skinned female", "very dark skin"}
+# A reference that is a PHOTO is probably a real person.
+_PHOTO = re.compile(r"(?<!\w)(realistic|photorealistic|photo \(medium\)|photo background|cosplay)(?!\w)")
+# Sexual content in what he asked for — never on a real person's photo.
+_SEXUAL = re.compile(r"\b(nsfw|nude|naked|nipples?|sex|sexual|porn(?:ographic|ography)?|explicit|hentai|lewd|"
+                     r"pussy|penis|cum|topless|bottomless|lingerie|underwear|panties|"
+                     r"undress(?:ed|ing)?|strip(?:ped|ping|tease)?|erotic|breasts?|cleavage|bikini)\b", re.I)
+
+
+_COLOURS = {"red", "blue", "green", "yellow", "orange", "purple", "pink", "black", "white",
+            "grey", "gray", "brown", "blonde", "silver", "aqua", "light", "dark", "multicolored",
+            "two-tone", "gradient", "streaked", "lavender", "gold", "golden"}
+
+
+# His tags naming a place or time: then the reference's own background goes
+# ("night, city street" on a white-background figure). Whole words only.
+_SCENE = re.compile(r"\b(background|scenery|street|city|room|bedroom|classroom|sky|night|"
+                    r"sunset|sunrise|indoors|outdoors|forest|beach|ocean|sea|mountains?|"
+                    r"field|park|space|cafe|shop|castle|ruins|desert|snow|rain|underwater|"
+                    r"landscape|town|village|garden|school|office|stage|train|cityscape)\b", re.I)
+
+
+def describe_reference(path, timeout=90):
+    """Danbooru tags for a picture: {"general", "character", "rating"} or
+    None if the tagger isn't installed or fails (redraw still works)."""
+    if not (TAGGER_MODEL.exists() and PY.exists()):
+        return None
+    try:
+        r = subprocess.run(["taskset", "-c", "8-15", str(PY), str(TAGGER), str(path)],
+                           capture_output=True, text=True, timeout=timeout)
+        return json.loads(r.stdout) if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _words(tag):
+    return tag.lower().split()
+
+
+def merge_reference_tags(prompt, tags):
+    """His tags first (what he wants changed), then what the reference shows,
+    minus anything his tags replace: "red hair" drops the reference's "blonde
+    hair", "night" drops "day". Whole-tag matching, never substrings."""
+    if not tags:
+        return prompt
+    his = [t.strip() for t in prompt.split(",") if t.strip()]
+    his_l = {t.lower() for t in his}
+    # "red hair" replaces the reference's hair COLOUR, not "long hair".
+    his_kind = {_words(t)[-1] for t in his
+                if len(_words(t)) > 1 and _words(t)[0] in _COLOURS}
+    opposite = {"day": "night", "night": "day", "indoors": "outdoors", "outdoors": "indoors",
+                "smile": "frown", "open mouth": "closed mouth", "closed mouth": "open mouth"}
+    new_scene = bool(_SCENE.search(prompt))
+    keep = []
+    for t in tags.get("character", []) + tags.get("general", []):
+        tl = t.lower()
+        w = _words(tl)
+        if tl in _REF_SKIP or tl in his_l:
+            continue
+        if new_scene and (w[-1] == "background" or tl in ("indoors", "outdoors", "scenery")):
+            continue
+        if len(w) > 1 and w[0] in _COLOURS and w[-1] in his_kind:
+            continue
+        if opposite.get(tl) in his_l:
+            continue
+        keep.append(t)
+        if len(keep) >= REF_TAGS_MAX:
+            break
+    return ", ".join(his + keep)
+
+
+def reference_refusal(prompt, tags):
+    """A real person's photo is never redrawn sexually. Code, not a model."""
+    if not tags:
+        return None
+    seen = " ".join(tags.get("general", [])).lower()
+    if _PHOTO.search(seen) and _SEXUAL.search(prompt or ""):
+        return ("refused: that reference looks like a photo of a real person, and I don't "
+                "make sexual pictures of real people")
+    return None
 
 
 def _reference(path, prompt):
@@ -241,7 +348,7 @@ def _spawn_watchdog(pid):
 # ------------------------------------------------------------------ workflow
 
 def _workflow(positive, negative, width, height, seed, steps, ref=None, strength=1.0,
-              model=None):
+              model=None, keep="look"):
     model = model or STYLES["anime"]
     wf = {
         "1": {"class_type": "UNETLoader",
@@ -274,15 +381,49 @@ def _workflow(positive, negative, width, height, seed, steps, ref=None, strength
         wf["12"] = {"class_type": "ImageScale",
                     "inputs": {"image": ["11", 0], "upscale_method": "lanczos",
                                "width": width, "height": height, "crop": "center"}}
-        wf["7"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["12", 0], "vae": ["3", 0]}}
-        wf["8"]["inputs"]["denoise"] = strength
+        if keep == "look":
+            wf["7"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["12", 0], "vae": ["3", 0]}}
+            wf["8"]["inputs"]["denoise"] = strength
+        elif keep == "lines":
+            # The reference's edges steer the first 80% of the steps; the
+            # last steps are free so lines don't look traced.
+            wf["20"] = {"class_type": "Canny", "inputs": {"image": ["12", 0], "low_threshold": 0.3,
+                                                           "high_threshold": 0.7}}
+            wf["21"] = {"class_type": "ControlNetLoader", "inputs": {"control_net_name": CONTROLNET}}
+            wf["22"] = {"class_type": "ControlNetApplyAdvanced",
+                        "inputs": {"positive": ["5", 0], "negative": ["6", 0], "control_net": ["21", 0],
+                                   "image": ["20", 0], "strength": CONTROL_STRENGTH,
+                                   "start_percent": 0.0, "end_percent": 0.8, "vae": ["3", 0]}}
+            wf["8"]["inputs"]["positive"] = ["22", 0]
+            wf["8"]["inputs"]["negative"] = ["22", 1]
+        elif keep == "character":
+            wf["30"] = {"class_type": "IPAdapterModelLoader", "inputs": {"ipadapter_file": IPADAPTER}}
+            wf["31"] = {"class_type": "CLIPVisionLoader", "inputs": {"clip_name": CLIP_VISION}}
+            wf["32"] = {"class_type": "IPAdapterAdvanced",
+                        "inputs": {"model": ["4", 0], "ipadapter": ["30", 0], "image": ["11", 0],
+                                   "weight": IPADAPTER_WEIGHT, "weight_type": "linear",
+                                   "combine_embeds": "concat", "start_at": 0.0, "end_at": 1.0,
+                                   "embeds_scaling": "V only", "clip_vision": ["31", 0]}}
+            wf["8"]["inputs"]["model"] = ["32", 0]
+            del wf["12"]
     return wf
 
 
+def keep_available(keep):
+    """None if this redraw mode's model files are installed, else why not."""
+    need = {"lines": [("controlnet", CONTROLNET)],
+            "character": [("ipadapter", IPADAPTER), ("clip_vision", CLIP_VISION)]}.get(keep, [])
+    if keep == "character" and not (COMFY / "custom_nodes/ComfyUI_IPAdapter_plus").is_dir():
+        return "the IP-Adapter node isn't installed"
+    gone = [f for d, f in need if not (COMFY / "models" / d / f).exists()]
+    return f"missing {', '.join(gone)}" if gone else None
+
+
 def generate_image(prompt, size=None, seed=None, on_progress=None,
-                   reference=None, strength=None, style="anime"):
+                   reference=None, strength=None, style="anime", keep=None):
     """Generate one illustration. With `reference` (a picture path), redraw
-    that picture instead: `strength` 0.2-0.95, how much to change it.
+    that picture: `keep` = lines (default: its outline/pose, everything else
+    new), look (`strength` 0.2-0.95, how much to change) or character.
     Returns {"path", "seconds", ...} or {"error"}."""
     prompt = (prompt or "").strip()
     if not prompt:
@@ -303,12 +444,19 @@ def generate_image(prompt, size=None, seed=None, on_progress=None,
                if not (COMFY / "models" / d / f).exists()]
     if missing:
         return {"error": f"image model files missing: {', '.join(missing)}"}
-    ref_img = ref_path = None
+    ref_img = ref_path = ref_tags = None
     if reference:
         ref_img, ref_path = _reference(reference, prompt)
         if ref_img is None:
             return {"error": ref_path}
         size = size if size in SIZES else _size_for(ref_img)
+        keep = keep if keep in KEEP_MODES else ("look" if strength not in (None, "") else "lines")
+        if keep_available(keep):
+            keep = "look"                     # always installed
+        ref_tags = describe_reference(ref_path)
+        reason = reference_refusal(prompt, ref_tags)
+        if reason:
+            return {"error": reason}
         try:
             strength = min(0.95, max(0.2, float(strength if strength not in (None, "")
                                                 else DEFAULT_STRENGTH)))
@@ -327,7 +475,10 @@ def generate_image(prompt, size=None, seed=None, on_progress=None,
         return {"error": f"image engine failed to start — see {LOG}"}
     _touch()
 
-    positive = f"{model['quality']}, {prompt}"
+    # A redraw is told what the reference shows, or at higher strength the
+    # content drifts toward whatever his few tags describe.
+    drawn = merge_reference_tags(prompt, ref_tags) if ref_tags else prompt
+    positive = f"{model['quality']}, {drawn}"
 
     ref_name = None
     if ref_img is not None:
@@ -336,7 +487,7 @@ def generate_image(prompt, size=None, seed=None, on_progress=None,
         except Exception as e:
             return {"error": f"couldn't hand the reference to the engine: {e}"}
     wf = _workflow(positive, model["negative"], width, height, seed, STEPS,
-                   ref=ref_name, strength=strength or 1.0, model=model)
+                   ref=ref_name, strength=strength or 1.0, model=model, keep=keep or "look")
     try:
         r = requests.post(f"{URL}/prompt", json={"prompt": wf, "client_id": uuid.uuid4().hex},
                           timeout=30)
@@ -387,7 +538,9 @@ def generate_image(prompt, size=None, seed=None, on_progress=None,
         session = None
     meta = {"prompt": prompt, "session": session, "size": size, "width": width, "height": height,
             "seed": seed, "steps": STEPS, "cfg": model.get("cfg", 1.0), "model": model["unet"], "style": style,
-            **({"reference": str(ref_path), "strength": strength} if ref_name else {}),
+            **({"reference": str(ref_path), "keep": keep,
+                "strength": strength if keep == "look" else None,
+                "reference_tags": drawn[len(prompt):].lstrip(", ")} if ref_name else {}),
             "seconds": round(time.monotonic() - started, 1),
             "created": datetime.now().isoformat(timespec="seconds")}
     path.with_suffix(".json").write_text(json.dumps(meta, indent=1))
@@ -429,7 +582,11 @@ TOOL = {"type": "function", "function": {
         "prompt": {"type": "string"},
         "size": {"type": "string", "enum": ["portrait", "landscape", "square"]},
         "reference": {"type": "string"},
-        "strength": {"type": "number", "description": "redraw: 0.3 small tweak … 0.9 keep only layout"},
+        "keep": {"type": "string", "enum": list(KEEP_MODES),
+                 "description": "redraw: lines = same pose/outline, new everything else "
+                                "(default); look = small touch-up; character = same "
+                                "character, new scene"},
+        "strength": {"type": "number", "description": "look only: 0.3 small tweak … 0.9"},
     }, "required": ["prompt"]}}}
 
 

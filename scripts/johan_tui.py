@@ -2090,13 +2090,14 @@ class JohanApp(App):
         self.draw_worker(arg, size, None, ref, strength, style)
 
     @work(thread=True)
-    def draw_worker(self, prompt, size, seed, reference=None, strength=None, style="anime"):
+    def draw_worker(self, prompt, size, seed, reference=None, strength=None, style="anime",
+                    keep=None):
         import johan_images as ji
         turn = self.turn
         try:
             r = ji.generate_image(prompt, size=size, seed=seed,
                                   reference=reference, strength=strength, style=style,
-                                  on_progress=lambda m: self.call_from_thread(
+                                  keep=keep, on_progress=lambda m: self.call_from_thread(
                                       setattr, self, "busy_label", m))
             if r.get("error"):
                 self.call_from_thread(turn.set_text, f"Couldn't draw that: {r['error']}")
@@ -2544,7 +2545,7 @@ class JohanApp(App):
         self.turn = self._chat().add(Turn())
         self._start_busy("drawing a variation")
         self.draw_worker(r.get("prompt", ""), r.get("size", "portrait"), None,
-                         r.get("reference"), r.get("strength"))
+                         r.get("reference"), r.get("strength"), keep=r.get("keep"))
 
     def action_redraw_image(self):
         """Use the selected picture as the starting point for a new one."""
