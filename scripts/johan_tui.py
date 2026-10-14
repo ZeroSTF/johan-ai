@@ -32,6 +32,7 @@ Design notes worth keeping (each one cost real time once):
 """
 
 import dataclasses
+import json
 import re
 import shutil
 import subprocess
@@ -39,6 +40,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from urllib.parse import urlparse
 from pathlib import Path
 
 from rich.markup import escape
@@ -484,7 +486,19 @@ class Turn(Vertical):
         if text:
             self.answer.display = True
             self.bullet.display = True
-            self.answer.update(text)
+            if self.answer.is_mounted:
+                self.answer.update(text)
+            else:
+                # Reopening a chat sets every answer before its Markdown is
+                # mounted, and Markdown drops an update made that early —
+                # reopened chats showed empty answers. Apply it on mount.
+                self._unmounted_text = text
+
+    def on_mount(self):
+        text = getattr(self, "_unmounted_text", None)
+        if text:
+            self._unmounted_text = None
+            self.call_after_refresh(self.answer.update, text)
 
     def finish(self, interrupted=False):
         secs = time.monotonic() - self.started
@@ -522,6 +536,36 @@ def _picture(path):
             return TermImage(im.copy())
     except Exception:
         return None
+
+
+def _sidecar(path):
+    try:
+        return json.loads(Path(path).with_suffix(".json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _card_from_saved(tool, payload):
+    """Rebuild a drawing / web-pictures card from a saved tool result, so a
+    reopened chat shows its pictures again. Only files that still exist; the
+    payload may be cut short (MAX_TOOL_CHARS), so paths are found by pattern
+    and the details come from each picture's own .json sidecar."""
+    if tool == "generate_image":
+        m = re.search(r'"path":\s*"([^"]+\.png)"', payload)
+        if m and Path(m.group(1)).is_file():
+            return ImageCard({**_sidecar(m.group(1)), "path": m.group(1)})
+    elif tool == "find_images":
+        pics = []
+        for path in dict.fromkeys(re.findall(r'"path":\s*"([^"]+)"', payload)):
+            if Path(path).is_file():
+                meta = _sidecar(path)
+                src = meta.get("source") or ""
+                pics.append({"path": path, "title": (meta.get("title") or "")[:80],
+                             "source": src[:100],
+                             "site": urlparse(src).netloc.removeprefix("www.") or "?"})
+        if pics:
+            return WebPicsCard({"pictures": pics})
+    return None
 
 
 _REF_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
@@ -773,7 +817,11 @@ class ChatPane(VerticalScroll):
 class HistoryScreen(ModalScreen):
     """Browse past conversations: filter, preview, reopen, delete."""
 
-    BINDINGS = [Binding("escape", "close", "close"), Binding("enter", "reopen", "reopen"),
+    # enter needs priority: the ListView binds enter itself ("select"), so
+    # with the list focused the screen's reopen never fired — it only worked
+    # after clicking the preview pane. From the filter box it opens the top match.
+    BINDINGS = [Binding("escape", "close", "close"),
+                Binding("enter", "reopen", "reopen", priority=True),
                 Binding("d", "delete", "delete")]
 
     def __init__(self):
@@ -1517,18 +1565,36 @@ class JohanApp(App):
     def _replay(self, messages):
         chat = self.query_one("#chat", ChatPane)
         chat.remove_children()
+        calls, cards = [], []          # tool names awaiting results; cards for the next answer
         for m in messages:
-            if m.get("role") == "user" and not str(m.get("content", "")).startswith("[Johan, internal]"):
+            role = m.get("role")
+            if role == "user" and not str(m.get("content", "")).startswith("[Johan, internal]"):
                 chat.add(UserMsg(_attach.shown_text(m["content"])))
                 if m.get("image_paths"):
                     chat.add(AttachedPics(m["image_paths"]))
-            elif m.get("role") == "assistant" and m.get("content"):
+            elif role == "assistant" and m.get("tool_calls"):
+                calls += [(c.get("function") or {}).get("name") for c in m["tool_calls"]]
+            elif role == "tool":
+                name = calls.pop(0) if calls else None
+                card = _card_from_saved(name, m.get("content") or "")
+                if card is not None:
+                    cards.append(card)
+            if role == "assistant" and m.get("content"):
                 t = chat.add(Turn())
                 t.set_text(jp.render_plan(jp.parse_plan(m["content"]))
                            if jp.is_plan_message(m) else m["content"])
                 t.activity.display = False
                 t.meta.update("")
                 self._remember_openables(m["content"])
+                # Pictures come back below the answer, as they appeared live.
+                for card in cards:
+                    chat.add(card)
+                    for pic in getattr(card, "pics", None) or [getattr(card, "result", {})]:
+                        if pic.get("path") and pic["path"] not in self.openables:
+                            self.openables.append(pic["path"])
+                cards = []
+        for card in cards:                 # a turn that ended without text
+            chat.add(card)
 
     @work(thread=True, exclusive=True, group="warm")
     def warm_up(self):
