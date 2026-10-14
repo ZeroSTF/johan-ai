@@ -158,7 +158,7 @@ def match(message, threshold=None, embed=None):
 # du on his home folder. A message that points back has no topic of its own:
 # it is matched together with his previous message (-> game-config, 0.65).
 # ("there" was dropped: "is there any space left?" is a new topic.)
-BACK_REF = re.compile(r"\b(it|its|this|that|these|those|them|ça|ca|cela|celui|celle|ceux)\b", re.I)
+BACK_REF = re.compile(r"\b(it|its|this|that|these|those|them)\b", re.I)
 
 
 def _match_text(messages, message):
