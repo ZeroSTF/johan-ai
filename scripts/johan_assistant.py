@@ -936,6 +936,11 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
             messages.append({"role": "assistant", "content": text})
             return text
         drawn = _drawn_answer(done)
+        said = (msg.get("content") or "").strip()
+        if drawn and said:
+            # "draw a red panda and tell me the prompt": what the model wrote
+            # beside the call is part of the answer, not to be dropped.
+            drawn = f"{said}\n\n{drawn}"
         if drawn:
             # The chat model was unloaded to make room for the drawing; one
             # more hop reloads it and re-reads the whole conversation just to
@@ -963,7 +968,8 @@ def _drawn_answer(done):
     lines = []
     for _, r in done:
         how = {"lines": " — same outline, redrawn", "character": " — same character, new scene",
-               "look": " — touched up"}.get(r.get("keep"), "") if r.get("reference") else ""
+               "look": " — touched up", "add": " — with the newcomer added"
+               }.get(r.get("keep"), "") if r.get("reference") else ""
         lines.append(f"Here it is{how} ({r.get('seconds')} s): `{r['path']}` — ctrl+o opens it.")
     return "\n".join(lines)
 
@@ -1015,15 +1021,24 @@ def _summary_of_tools(messages):
         for c in m.get("tool_calls") or []:
             n = (c.get("function") or {}).get("name", "?")
             names[n] = names.get(n, 0) + 1
-    lines = []
+    ok = failed = 0
     for m in messages[start:]:
         if m.get("role") == "tool":
-            out = " ".join(str(m.get("content") or "").split())[:160]
-            if out:
-                lines.append(f"- {out}")
+            if _steps_failed_only(m.get("content")):
+                failed += 1
+            else:
+                ok += 1
     ran = ", ".join(f"{n} ×{k}" if k > 1 else n for n, k in names.items()) or "nothing"
-    return ("I ran out of steps before writing this up properly. I ran: "
-            f"{ran}. The last results were:\n" + "\n".join(lines[-4:] or ["- (none)"]))
+    # Raw tool JSON used to be pasted here — including error text written for
+    # the model ("Say so rather than…"). He gets a plain account instead.
+    return (f"I ran out of steps before I could write an answer. I ran {ran} "
+            f"({ok} worked, {failed} failed). Ask again more narrowly, or say "
+            f"\"go on\" and I'll continue from what I found.")
+
+
+def _steps_failed_only(content):
+    import johan_steps
+    return johan_steps._failed_only(content)
 
 
 SESSION_FILE = ROOT / "brain/last-session.json"
