@@ -130,7 +130,16 @@ def _evidence(messages, start):
     parts = [m["content"][:PER_RESULT_CHARS] for m in messages[start:]
              if m.get("role") == "tool" and m.get("content")
              and not _shown_by_code(m["content"]) and not _failed_only(m["content"])]
-    return "\n".join(parts)[:EVIDENCE_CHARS]
+    # Newest first: after web_search + fetch_page the answer comes from the
+    # page, and oldest-first filled the budget with search snippets so the
+    # checker never saw the page and "corrected" a backed answer.
+    out, size = [], 0
+    for part in reversed(parts):
+        if size + len(part) > EVIDENCE_CHARS and out:
+            break
+        out.insert(0, part)
+        size += len(part) + 1
+    return "\n".join(out)[:EVIDENCE_CHARS]
 
 
 def _verify_and_fix(messages, start, answer, should_stop=None):

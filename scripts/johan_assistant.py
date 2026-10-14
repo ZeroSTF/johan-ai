@@ -870,6 +870,12 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
     # unless the word-boundary pre-filter fires; the UIs show LAST_LEARNED.
     LAST_LEARNED[:] = [] if (should_stop and should_stop()) else \
         _learn.after_turn(messages, start, q)
+    # The saved rule only reaches the system prompt in the NEXT chat; this
+    # one gets it now, appended (cheap — the cached prefix is untouched).
+    new_rules = [r.get("text") for r in LAST_LEARNED if r.get("text") and not r.get("duplicate")]
+    if new_rules:
+        messages.append({"role": "system", "content": "From now on, as he just asked: "
+                         + " ".join(new_rules)})
     return answer
 
 
