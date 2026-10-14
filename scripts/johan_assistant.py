@@ -734,7 +734,12 @@ ENGINE = "loop"
 # once if it is confidently NOT backed. Caught "2,260 apps" when the tool
 # had returned 2,260 apt *packages*. Costs one decision (~1-3 s) per
 # tool-using turn; a rewrite is one more short call.
-VERIFY_ANSWERS = True
+# OFF since 2026-10-14: switched on and off over the same 39 eval cases it
+# scored 39 vs 38 (the one miss unrelated) while the turns took 465 s vs
+# 331 s, and in real use that day it wrecked three answers (business ideas
+# cut to a blog's list, "what skills do you have?" rewritten into nonsense,
+# a TF2 search "corrected"). Kept switchable for measuring.
+VERIFY_ANSWERS = False
 
 
 # Words that make it worth ASKING whether he wants deep research. Only a

@@ -138,7 +138,9 @@ try:
         ja.DISPATCH["run_command"] = lambda **k: {"output": "a b"}
         verified.clear()
         msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "x"}]
+        real_v, ja.VERIFY_ANSWERS = ja.VERIFY_ANSWERS, True     # off by default since 2026-10-14
         out = ja.run_turn(msgs)
+        ja.VERIFY_ANSWERS = real_v
         ja.DISPATCH["run_command"] = real_rc
         check("check says no: prose kept and verified", (out, len(verified)),
               ("Want the big one or the small one?", 1))
