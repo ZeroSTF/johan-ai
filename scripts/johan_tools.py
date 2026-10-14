@@ -1047,6 +1047,12 @@ def _split_segments(argv):
     return segments
 
 
+def _blocked(problem):
+    """A command the read-only checker won't run by itself. run_command_tool
+    can still ask him to approve it (see johan_actions._raw_step)."""
+    return {"error": problem, "blocked": True}
+
+
 def run_command(command, timeout=20):
     """Run a read-only shell command. Output is paged, not truncated.
 
@@ -1059,7 +1065,7 @@ def run_command(command, timeout=20):
         try:
             argv = shlex.split(command)
         except ValueError as e:
-            return {"error": f"could not parse command: {e}"}
+            return _blocked(f"could not parse command: {e}")
     else:
         argv = list(command)
 
@@ -1083,13 +1089,13 @@ def run_command(command, timeout=20):
     # change what runs. `&&`, `||`, `;` and `|` do not — see _split_segments.
     for meta in (">", ">>", "<", "`", "$("):
         if any(meta in a for a in argv):
-            return {"error": f"{meta!r} is not allowed — it writes files or "
-                              f"splices in unchecked text. Pipes (|) and "
-                              f"chaining (&&, ||, ;) ARE supported."}
+            return _blocked(f"{meta!r} is not allowed — it writes files or "
+                            f"splices in unchecked text. Pipes (|) and "
+                            f"chaining (&&, ||, ;) ARE supported.")
 
     segments = _split_segments(argv)
     if len(segments) > 5:
-        return {"error": "at most 5 chained commands"}
+        return _blocked("at most 5 chained commands")
 
     # Parse and validate EVERYTHING before running ANYTHING — a chain must
     # not half-execute and then report a rejection from a later link.
@@ -1106,7 +1112,7 @@ def run_command(command, timeout=20):
         if any(not s for s in stages):
             return {"error": "empty stage in the pipeline"}
         if len(stages) > 4:
-            return {"error": "at most 4 piped stages"}
+            return _blocked("at most 4 piped stages")
 
         # Expand globs ourselves (no shell to do it). `cat /sys/class/drm/*/modes`
         # silently failed before, because "*" reached cat as a literal character.
@@ -1127,7 +1133,7 @@ def run_command(command, timeout=20):
         for stage in stages:
             problem = _check_command(stage)
             if problem:
-                return {"error": problem}
+                return _blocked(problem)
         plan.append((op, stages))
 
     env = _child_env()
@@ -1390,6 +1396,8 @@ def apply_edit(edit_id):
     edit = next((e for e in edits if e["id"] == int(edit_id)), None)
     if not edit:
         return {"error": f"no pending edit {edit_id}"}
+    if edit.get("mode") == "write":
+        return _apply_write(edit, edits)
     # Re-validate at apply time, not just at proposal: the file could have
     # been swapped for a symlink out of the repo in between.
     try:
@@ -1428,6 +1436,38 @@ def apply_edit(edit_id):
         pass
     return {"applied": True, "path": edit["path"], "backup": str(backup),
             "note": "backup kept in brain/edit-backups/"}
+
+
+def _apply_write(edit, edits):
+    """write_file's half of apply_edit: same backup, syntax gate and rewind log."""
+    import hashlib
+    try:
+        target = _write_path(edit["abs_path"])
+    except ValueError as e:
+        return {"error": f"{edit['path']}: {e}"}
+    existed = target.exists()
+    before = target.read_text(errors="replace") if existed else ""
+    if existed != (not edit.get("new_file")) or (
+            existed and hashlib.sha256(before.encode()).hexdigest() != edit.get("before_sha")):
+        return {"error": "the file changed since this was proposed — read it again and redo"}
+    after = edit["content"]
+    if target.suffix == ".py":
+        try:
+            compile(after, str(target), "exec")
+        except SyntaxError as e:
+            return {"error": f"not written — it isn't valid Python: line {e.lineno}: {e.msg}"}
+    EDIT_BACKUPS.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = EDIT_BACKUPS / (edit["path"].replace("/", "__").replace("~", "home") + f".{stamp}.bak")
+    backup.write_text(before)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(after)
+    _save_edits([e for e in edits if e["id"] != edit["id"]])
+    try:
+        _actions.note_edit_applied(edit, target, backup, after)
+    except Exception:
+        pass
+    return {"applied": True, "path": edit["path"], "backup": str(backup)}
 
 
 def discard_edit(edit_id):
@@ -1579,6 +1619,223 @@ def project_files(action=None, query=None, path=None, max_chars=1500):
 
 
 # --------------------------------------------------------------------------
+# files — read / search / write anywhere in his home (2026-10-14)
+# --------------------------------------------------------------------------
+#
+# project_files saw only ~/johan, so a game config or a script in ~/code
+# went through run_command + cat, with no line numbers to anchor an edit on.
+# Reading and searching need no approval (SENSITIVE still applies — output
+# lands in the model's context); writing a whole file is approved on a card
+# with the diff, like propose_edit, and can be rewound.
+
+SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".cache",
+             ".mypy_cache", ".pytest_cache", "dist", "build", ".tox", ".idea",
+             "site-packages", ".local", ".var", ".steam", "snap"}
+READ_CHARS = 1700
+SEARCH_MAX_FILES = 6000
+SEARCH_SECONDS = 4.0
+
+
+def _home_path(path, base=None):
+    """Resolve a path he could mean → (Path) inside his home, or ValueError.
+    Relative paths are relative to `base` (default ~/johan)."""
+    raw = Path(os.path.expanduser(str(path or "").strip()))
+    if not str(path or "").strip():
+        raise ValueError("path is required")
+    cand = raw if raw.is_absolute() else (base or PROJECT_ROOT) / raw
+    real = cand.resolve()
+    home = Path.home().resolve()
+    if real != home and home not in real.parents:
+        raise ValueError(f"refused: {path} is outside your home directory "
+                         f"(use run_command for system files)")
+    if SENSITIVE.search(str(real)):
+        raise ValueError(f"refused: {path} looks like keys, passwords or secrets")
+    return real
+
+
+def _is_binary(p):
+    try:
+        with open(p, "rb") as fh:
+            return b"\0" in fh.read(8192)
+    except OSError:
+        return False
+
+
+def read_file(path, start=1):
+    """A file with line numbers, from line `start`, bounded in size; or a
+    folder's listing."""
+    try:
+        p = _home_path(path)
+    except ValueError as e:
+        return {"error": str(e)}
+    if p.is_dir():
+        entries = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+        shown = [e.name + ("/" if e.is_dir() else "") for e in entries
+                 if not SENSITIVE.search(e.name)][:80]
+        return {"path": str(p), "folder": True, "entries": shown,
+                "count": len(entries)}
+    if not p.is_file():
+        return {"error": f"no such file: {path} — check the name with "
+                         f"files(path=<its folder>) or run_command find"}
+    if _is_binary(p):
+        return {"error": f"{path} is a binary file"}
+    lines = p.read_text(errors="replace").splitlines()
+    start = max(1, int(start or 1))
+    out, size, n = [], 0, start
+    width = len(str(len(lines)))
+    while n <= len(lines) and size < READ_CHARS:
+        row = f"{n:>{width}}│{lines[n - 1][:400]}"
+        out.append(row)
+        size += len(row) + 1
+        n += 1
+    res = {"path": str(p), "lines": len(lines), "from": start,
+           "to": n - 1, "text": "\n".join(out)}
+    if n <= len(lines):
+        res["more"] = f"files(path=..., start={n}) reads on"
+    res["note"] = ("numbers are not part of the file; text after │ is verbatim "
+                   "(indentation included) — copy it exactly into propose_edit")
+    return res
+
+
+def search_files(query, path=None):
+    """Case-insensitive text search through a folder (default ~/johan) or
+    one file. Matches keep their indentation, for propose_edit."""
+    q = str(query or "").strip()
+    if not q:
+        return {"error": "query is required"}
+    try:
+        root = _home_path(path) if path else PROJECT_ROOT.resolve()
+    except ValueError as e:
+        return {"error": str(e)}
+    if not root.exists():
+        return {"error": f"no such file or folder: {path}"}
+    ql, hits, scanned = q.lower(), [], 0
+    t0 = time.monotonic()
+
+    def scan(f):
+        nonlocal scanned
+        scanned += 1
+        try:
+            if f.stat().st_size > EDIT_MAX_BYTES or _is_binary(f):
+                return
+            for i, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
+                if ql in line.lower():
+                    hits.append({"path": str(f.relative_to(root)) if f != root else f.name,
+                                 "line": i, "text": line[:200]})
+                    if len(hits) >= 40:
+                        return
+        except OSError:
+            pass
+
+    if root.is_file():
+        scan(root)
+    else:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS
+                                 and not d.startswith("venv") and not SENSITIVE.search(d))
+            for name in sorted(filenames):
+                if SENSITIVE.search(name):
+                    continue
+                scan(Path(dirpath) / name)
+                if len(hits) >= 40 or scanned >= SEARCH_MAX_FILES:
+                    break
+            if (len(hits) >= 40 or scanned >= SEARCH_MAX_FILES
+                    or time.monotonic() - t0 > SEARCH_SECONDS):
+                break
+    out = {"searched": str(root), "query": q, "count": len(hits), "matches": hits,
+           "files_scanned": scanned}
+    if len(hits) >= 40 or scanned >= SEARCH_MAX_FILES or time.monotonic() - t0 > SEARCH_SECONDS:
+        out["note"] = "stopped early — narrow it with `path` to a smaller folder"
+    elif not hits:
+        out["note"] = (f"no match under {root}. Other folder? pass `path` "
+                       f"(e.g. ~/Documents) — this tool searches his whole home.")
+    return out
+
+
+WRITE_MAX_BYTES = 512 * 1024
+
+
+def _write_path(path):
+    """Where write_file may write: his home, no secrets, no .git internals,
+    never Johan's brain/ or compose/."""
+    real = _home_path(path)
+    if ".git" in real.parts:
+        raise ValueError("refused: .git internals are never written")
+    for d in (PROJECT_ROOT / "brain", PROJECT_ROOT / "compose"):
+        d = d.resolve()
+        if real == d or d in real.parents:
+            raise ValueError(f"refused: {d} is Johan's own data")
+    if real.is_dir():
+        raise ValueError(f"{path} is a folder — give a file path")
+    if real.exists() and (_is_binary(real) or real.stat().st_size > EDIT_MAX_BYTES):
+        raise ValueError(f"refused: {path} is binary or larger than 1 MB")
+    return real
+
+
+def write_file(path, content, why=""):
+    """Create a file or replace its whole content — asked first, with the diff."""
+    try:
+        target = _write_path(path)
+    except ValueError as e:
+        return {"error": str(e)}
+    content = "" if content is None else str(content)
+    if len(content.encode()) > WRITE_MAX_BYTES:
+        return {"error": "content is over 512 KB — too big to write from a chat"}
+    existed = target.exists()
+    before = target.read_text(errors="replace") if existed else ""
+    if existed and before == content:
+        return {"error": "the file already has exactly this content"}
+    if existed and before and len(content) < len(before) // 3:
+        hint = (" (that would drop most of the file — to change part of it, use "
+                "propose_edit instead)")
+    else:
+        hint = ""
+    import hashlib
+    edits = _load_edits()
+    edit_id = max((e["id"] for e in edits), default=0) + 1
+    display = str(target).replace(str(Path.home()), "~", 1)
+    edits.append({
+        "id": edit_id, "mode": "write", "path": display, "abs_path": str(target),
+        "new_file": not existed, "content": content,
+        "before_sha": hashlib.sha256(before.encode()).hexdigest() if existed else None,
+        "old_string": before, "new_string": content,
+        "why": (why or "") + hint, "created": datetime.now().isoformat(timespec="seconds"),
+        "diff": _diff(display, before, content), "turn": _actions.TURN})
+    _save_edits(edits)
+    import johan_approval as jap
+    decision = jap.ask("edit", edits[-1])
+    if decision is None:
+        return {"proposed": True, "edit_id": edit_id, "path": display,
+                "diff": edits[-1]["diff"][:1200],
+                "note": "NOT written — it waits for his OK in Johan's chat on the PC."}
+    if decision["choice"] == "no":
+        discard_edit(edit_id)
+        out = {"declined": True, "path": display,
+               "note": "He said NO — nothing was written. Follow what he said instead."}
+        if decision["reason"]:
+            out["he_said"] = decision["reason"]
+        return out
+    res = apply_edit(edit_id)
+    if res.get("error"):
+        return {"written": False, "path": display,
+                "error": f"he approved it but writing FAILED: {res['error']}"}
+    return {"written": True, "created": not existed, "path": display,
+            "note": "He approved it and it is written. Report that."}
+
+
+def files(path=None, query=None, start=None, content=None, why=None, action=None):
+    """One tool: read (path), search (query [+ path]), write (path + content)."""
+    if content is not None and path:
+        return write_file(path, content, why or "")
+    if query:
+        return search_files(query, path)
+    if path:
+        return read_file(path, start or 1)
+    return {"error": "give `path` to read, `query` to search, or `path` + "
+                     "`content` to write a file"}
+
+
+# --------------------------------------------------------------------------
 # Schemas + dispatch, imported by johan_assistant.py
 # --------------------------------------------------------------------------
 
@@ -1615,16 +1872,22 @@ TOOLS = [
     _fn("tasks", "His todo list: list, add (`text`), done (`task_id`).",
         {"action": {"type": "string", "enum": ["list", "add", "done"]},
          "text": {"type": "string"}, "task_id": {"type": "integer"}}),
-    _fn("project_files", "Files in ~/johan only: `path` reads, `query` greps, both = grep in that file.",
-        {"path": {"type": "string"}, "query": {"type": "string"}}),
+    _fn("files", "Files anywhere in /home/zeros. `path` reads it with line numbers (`start` "
+                  "to continue) or lists a folder; `query` searches text (in `path`, default "
+                  "~/johan); `path`+`content` writes the whole file — he is asked to approve.",
+        {"path": {"type": "string"}, "query": {"type": "string"},
+         "start": {"type": "integer"}, "content": {"type": "string"},
+         "why": {"type": "string"}}),
     _fn("scratchpad", "Working notes for a task spanning several messages (always visible "
                        "to you). `text` writes, `append` adds, `clear` wipes.",
         {"text": {"type": "string"}, "append": {"type": "boolean"},
          "clear": {"type": "boolean"}}),
-    _fn("run_command", "Read-only shell anywhere on his machine (ls, cat, find, grep, df, "
-                        "ps, docker, git log, nvidia-smi…). Pipes and && work. Long output "
-                        "is paged: `page`=N reads page N of the last output.",
-        {"command": {"type": "string"}, "page": {"type": "integer"}}),
+    _fn("run_command", "Shell anywhere on his machine. Read-only commands (ls, cat, find, "
+                        "grep, df, ps, docker ps, git log, nvidia-smi…) run at once; anything "
+                        "else is shown to him to approve first (`why` says what it's for). "
+                        "Long output is paged: `page`=N reads page N of the last output.",
+        {"command": {"type": "string"}, "page": {"type": "integer"},
+         "why": {"type": "string"}}),
     _fn("propose_edit", "Edit a file in ~/johan or a git repo under /home/zeros. He is asked "
                          "to approve it; the result comes back to you. `old_string` must match "
                          "exactly once, indentation included — read the file first.",
@@ -1661,13 +1924,28 @@ def scratchpad(text=None, append=False, clear=False):
     return {"notes": scratchpad_read() or "(empty)"}
 
 
-def run_command_tool(command=None, page=None, timeout=20):
+def run_command_tool(command=None, page=None, timeout=20, why=None):
     """run_command + read_output as one tool: `page` pages the last output."""
     if page and not command:
         return read_output(page=page)
     if not command:
         return {"error": "run_command needs `command` (or `page` to read more of the last output)"}
     out = run_command(command, timeout=timeout)
+    if out.pop("blocked", False):
+        # Outside the read-only list: like Claude Code, ask him — the card
+        # shows the exact command; it runs only on his yes. Secrets are never
+        # asked about (the checker's "refusing to touch" stays a refusal).
+        import johan_approval as jap
+        if "refusing to touch" in out["error"]:
+            return out
+        if not jap.can_ask():
+            out["note"] = ("nobody can approve it right now (phone or one-shot) — "
+                           "propose_action stages it for him to approve on the PC")
+            return out
+        res = _actions.propose_action(command, why=why or "")
+        res.setdefault("note", "")
+        res["asked_because"] = "not on the read-only list, so he was asked first"
+        return res
     if out.get("pages", 1) > 1:
         # Long output: also show the lines past page 1 that match his question,
         # so the answer on page 7 doesn't cost six more hops to find.
@@ -1695,7 +1973,7 @@ DISPATCH = {
     "latest_version": latest_version, "wikipedia": wikipedia,
     "current_datetime": current_datetime, "calculate": calculate,
     "system_status": system_status, "tasks": tasks,
-    "project_files": project_files,
+    "files": files, "project_files": project_files,
     "search_conversations": search_conversations,
     "propose_edit": propose_edit,
     "run_command": run_command_tool, "scratchpad": scratchpad,

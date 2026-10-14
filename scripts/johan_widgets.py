@@ -373,10 +373,13 @@ class ApprovalCard(_Vertical):
     def _title(self):
         if self.kind == "action":
             root = " [b $error]needs your password[/]" if self.item.get("root") else ""
-            head = "⏵ Waiting from earlier: a change" if self.earlier else "⏵ Johan wants to change something"
+            head = ("⏵ Waiting from earlier: a change" if self.earlier else
+                    "⏵ Johan wants to run a command" if self.item.get("raw") else
+                    "⏵ Johan wants to change something")
             return mk(f"[b $warning]{head}" + root + "[/]  [$text-muted]$w[/]",
                       w=self.item.get("why") or "")
-        head = "⏵ Waiting from earlier: an edit to" if self.earlier else "⏵ Johan wants to edit"
+        verb = ("create" if self.item.get("new_file") else "rewrite") if self.item.get("mode") == "write" else "edit"
+        head = f"⏵ Waiting from earlier: {verb}" if self.earlier else f"⏵ Johan wants to {verb}"
         return mk(f"[b $warning]{head}[/] [b]$p[/]  [$text-muted]$w[/]",
                   p=self.item.get("path", "?"), w=self.item.get("why") or "")
 

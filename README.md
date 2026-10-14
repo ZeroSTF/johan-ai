@@ -30,7 +30,7 @@ back earlier questions. **esc** stops an answer immediately.
 | — | **Chat** | talking to Johan |
 | **F2** | **History** | browse, reopen or delete past chats (`d` twice deletes) |
 | **F3** | **Jobs** | the apply queue |
-| **F5** | **Images** | everything Johan has drawn |
+| **F4** | **Images** | everything Johan has drawn |
 | **F1** | Help | all of this, inside the app |
 
 Other keys: **ctrl+p** searches every action, **ctrl+n** new chat,
@@ -93,10 +93,11 @@ real computation.
 
 ### Look around the PC
 
-It can read files anywhere in my home folder, check what's running, look at
-logs, disk, GPU, Docker, installed apps and so on, through a **read-only**
-shell. Read-only means an allowlist of safe programs, no shell tricks,
-and secrets like `~/.ssh` and `.env` files refused.
+It can read files anywhere in my home folder (with line numbers), search a
+whole folder for text, check what's running, and look at logs, disk, GPU,
+Docker, installed apps and so on. Commands on a **read-only** allowlist run
+straight away. Anything else is shown to me first (see below). Secrets like
+`~/.ssh` and `.env` files are refused either way.
 
 ### Change things on the PC, only when I say yes
 
@@ -116,12 +117,21 @@ step does, the exact command, whether it needs root, and how it will be undone.
   password.
 - Before running, every step is checked against the real system (does that
   package exist, is that setting real, is that theme installed).
-- Files are never deleted, only moved to the Trash.
+- Known change kinds never delete files, they move them to the Trash.
 - The desktop, drivers, kernel, my keys and Johan's own data are off limits
   even with approval.
 - **ctrl+z** rewinds a turn and undoes what it changed.
 
-Code edits work the same way: the card shows the diff.
+Code edits and new or rewritten files work the same way: the card shows the
+diff, and ctrl+z rewind puts the file back (or removes a file Johan created).
+
+**Any other command** (a `pip install`, a build, a script, `git push`) gets
+the same kind of card, showing the exact command, like Claude Code. It runs only
+on my yes, is never "always allowed", and can't be undone automatically. A
+short list is refused even with approval: deleting `/`, my home or system
+folders, formatting or writing straight to a disk, `curl … | sh`, switching the
+graphics mode, removing the driver/kernel/desktop, and touching secrets or
+Johan's own data.
 
 Changes proposed while I'm not there to answer (Johan's self-review, my phone,
 a one-shot `johan "…"`) show up as the same cards the next time I open Johan.
@@ -165,7 +175,7 @@ Drag a file into the terminal to paste its path. The number (0.2–0.95,
 default 0.6) is how much changes: 0.3 keeps it almost the same, 0.7+ for big
 changes like day → night.
 
-**F5 Images:** `o` open, `v` variation, `u` reuse the prompt, `i` redraw
+**F4 Images:** `o` open, `v` variation, `u` reuse the prompt, `i` redraw
 this one, `x` twice to delete.
 
 ### Research

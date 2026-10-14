@@ -37,6 +37,11 @@ def approver(fn):
         _APPROVER.reset(token)
 
 
+def can_ask():
+    """Is someone there to answer right now?"""
+    return _APPROVER.get() is not None
+
+
 def ask(kind, item):
     """Ask him about `item` ("action" or "edit"). None = nobody to ask."""
     fn = _APPROVER.get()

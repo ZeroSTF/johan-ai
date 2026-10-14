@@ -6,7 +6,7 @@ tools, stops an answer with esc, recalls history with ↑, switches tabs, draws
 a picture and deletes the chat it's in — and asserts on what ends up on screen.
 
 Privacy and side effects, by construction:
-  - never opens History (F2) or Images (F5): those show his chats and pictures
+  - never opens History (F2) or Images (F4): those show his chats and pictures
   - the sidebar's tasks panel is blanked (it shows his task text)
   - never asks about him, so stored memories aren't recited onto the screen
   - deletes only the chats it created, and restores the `--continue`

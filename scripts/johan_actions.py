@@ -75,6 +75,11 @@ def _jt():
     return jt
 
 
+class NotListed(ValueError):
+    """Not one of the known change kinds (or uses shell syntax): it can still
+    run as a free-form command, shown to him verbatim and approved (`_raw_step`)."""
+
+
 class Refused(ValueError):
     pass
 
@@ -585,23 +590,92 @@ RULES = {
     "chmod": _chmod, "rmdir": _rmdir, "gio": _gio,
 }
 
-INSTEAD = {
-    "rm": "files are never deleted: use `gio trash PATH` (it goes to the Trash)",
-    "sudo": "don't write sudo — root steps are detected and he gets the system "
-            "password dialog",
-    "pkexec": "don't write pkexec — root steps are detected automatically",
-    "dd": "never", "mkfs": "never", "shred": "never",
-    "sh": "no shell — write the commands themselves, joined with &&",
-    "bash": "no shell — write the commands themselves, joined with &&",
-    "curl": "no downloads-and-run; install from apt or flatpak",
-    "wget": "no downloads-and-run; install from apt or flatpak",
-    "pip": "not supported yet — say so instead",
-    "snap": "snap isn't installed here; use apt or flatpak",
-    "tee": "writing file contents isn't supported — use propose_edit for files in a git repo",
-    "echo": "writing file contents isn't supported — use propose_edit for files in a git repo",
-    "sed": "use propose_edit for file contents",
-    "dconf": "use gsettings set",
-}
+# ------------------------------------------------------------------ any other command
+#
+# Not every change fits a known kind (pip install, a build, a script, rm of
+# one file, `git push`). Those run as he typed them would, through bash —
+# but ONLY with his approval for that exact text, shown verbatim on the card,
+# never always-allowed (`_rule_of` refuses them), no undo, not checked after.
+# A short list is refused even with approval: the few lines where one tired
+# "1" costs the machine.
+
+_TOP = r"(/|~/?|\$HOME/?|/home/?|/home/zeros/?|/(usr|etc|boot|var|bin|sbin|lib|lib64|opt|root|srv|mnt|media)/?)"
+NEVER = [
+    (re.compile(r"\brm\b(?=[^;&|]*\s-[a-zA-Z]*[rR])[^;&|]*\s[\"']?" + _TOP + r"[\"']?(\*)?(\s|$|[;&|])"),
+     "recursive delete of / , your home or a system folder"),
+    (re.compile(r"--no-preserve-root"), "--no-preserve-root"),
+    (re.compile(r"\b(mkfs(\.\w+)?|wipefs|fdisk|sfdisk|gdisk|parted|mkswap|blkdiscard)\b"),
+     "partitioning or formatting a disk"),
+    (re.compile(r"\bof=/dev/(?!null\b)"), "writing straight to a disk device"),
+    (re.compile(r">\s*/dev/(sd|nvme|hd|vd|mmcblk)"), "writing straight to a disk device"),
+    (re.compile(r"\bshred\b[^;&|]*/dev/"), "shredding a disk device"),
+    (re.compile(r"\b(curl|wget)\b[^;&]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b"),
+     "downloading a script and running it unseen (curl | sh)"),
+    (re.compile(r"\b(ba|z)?sh\s+<\(\s*(curl|wget)|\$\(\s*(curl|wget)[^)]*\)\s*\)?"),
+     "downloading a script and running it unseen"),
+    (re.compile(r":\(\)\s*\{"), "a fork bomb"),
+    (re.compile(r"\b(chmod|chown)\b[^;&|]*\s-[a-zA-Z]*R[^;&|]*\s" + _TOP + r"(\s|$)"),
+     "changing permissions/owner of / , your home or a system folder"),
+    (re.compile(r"\bsystem76-power\s+graphics\s+\w"), "switching the graphics mode (it must stay nvidia)"),
+    (re.compile(r"\b(apt|apt-get|dpkg)\b[^;&|]*\b(remove|purge|autoremove|-r|-P)\b[^;&|]*"
+                r"\b(nvidia\S*|linux-image\S*|linux-generic|gnome-shell|pop-desktop|gdm3|systemd|xorg|sudo)\b"),
+     "removing the driver, kernel, desktop or core system"),
+    (re.compile(r"\b(passwd|chpasswd|visudo|usermod|userdel)\b"), "changing accounts or sudo rights"),
+]
+RAW_TIMEOUT = 300
+
+
+def never_reason(text):
+    for rx, why in NEVER:
+        if rx.search(text):
+            return why
+    return None
+
+
+def _raw_step(text):
+    """A free-form command → one step run by bash, or Refused."""
+    t = (text or "").strip()
+    root = False
+    m = re.match(r"^sudo(\s+-\S+)*\s+", t)
+    if m:
+        root, t = True, t[m.end():].strip()
+    if not t:
+        raise Refused("the command is empty")
+    if re.search(r"(^|[;&|(]\s*)(sudo|su|pkexec|doas)\b", t):
+        raise Refused("only a single leading `sudo` is supported — root runs through "
+                      "his password dialog")
+    why = never_reason(t)
+    if why:
+        raise Refused(f"never allowed, even with his approval: {why}")
+    if _jt().SENSITIVE.search(t):
+        raise Refused("it touches what looks like keys, passwords or secrets — off limits")
+    full = re.sub(r"(?<![\w/~])~(?=/|\s|$)", str(HOME),
+                  t.replace("${HOME}", str(HOME)).replace("$HOME", str(HOME)))
+    for d in PROTECTED_DIRS:
+        if str(d) in full:
+            raise Refused(f"{d} is Johan's own data and is never changed by a command")
+    return {"argv": ["bash", "-c", t], "root": root, "timeout": RAW_TIMEOUT, "raw": True,
+            "shown": ("sudo " if root else "") + t,
+            "what": "run this command as written" + (" as root" if root else ""),
+            "undo": None, "undo_note": "none — not a known change kind, so it can't be undone or checked"}
+
+
+def raw_output(results):
+    """Page 1 of a raw command's output for the model; the whole of it goes
+    to brain/terminal/last.txt so run_command(page=N) reads the rest."""
+    jt = _jt()
+    text = "\n".join(r.get("full_output", r.get("output", "")) for r in results)
+    try:
+        jt.TERMINAL_DIR.mkdir(parents=True, exist_ok=True)
+        (jt.TERMINAL_DIR / "last.txt").write_text(text)
+    except OSError:
+        pass
+    lines = text.splitlines()
+    head, page, pages = jt._page_of(lines, 1)
+    out = {"output": head, "lines": len(lines), "pages": pages}
+    if pages > 1:
+        out["more"] = f"page 1 of {pages} — run_command(page=2) reads the next"
+    return out
 
 
 def parse(commands):
@@ -622,8 +696,7 @@ def parse(commands):
     for tok in argv:
         if tok != "&&" and (re.fullmatch(r"[|;<>&]+", tok) or re.match(r"\d?>", tok)
                             or tok.endswith(";") or "`" in tok or "$(" in tok):
-            raise Refused(f"{tok!r}: pipes, ';', '||', redirects and $() are not "
-                          f"allowed in a change — chain plain commands with && only")
+            raise NotListed(f"{tok!r}: shell syntax")
     segs, cur = [], []
     for tok in argv:
         if tok == "&&":
@@ -649,10 +722,7 @@ def parse(commands):
             if prog in jt.SAFE_COMMANDS and not jt._check_command(seg):
                 raise Refused(f"`{_q(seg)}` only reads — run it with run_command, "
                               f"not as a change")
-            hint = INSTEAD.get(prog)
-            raise Refused(f"`{prog}` can't be used in a change"
-                          + (f": {hint}" if hint else
-                             ". Allowed: " + ", ".join(sorted(RULES))))
+            raise NotListed(f"`{prog}` is not a known change kind")
         step = rule(seg[1:])
         step["shown"] = _q(step["argv"])
         steps.append(step)
@@ -683,8 +753,15 @@ def propose_action(commands=None, why="", undo_last=False, _undo_of=None):
     """Stage a change to his machine. Runs NOTHING."""
     if undo_last:
         return propose_undo()
+    raw = False
     try:
         steps = parse(commands)
+    except NotListed:
+        text = " && ".join(map(str, commands)) if isinstance(commands, list) else str(commands or "")
+        try:
+            steps, raw = [_raw_step(text)], True
+        except Refused as e:
+            return {"error": str(e), "note": "nothing was staged"}
     except Refused as e:
         return {"error": str(e), "note": "nothing was staged"}
     pending = list_actions()
@@ -692,14 +769,14 @@ def propose_action(commands=None, why="", undo_last=False, _undo_of=None):
     action = {"id": aid, "why": (why or "").strip()[:300],
               "created": datetime.now().isoformat(timespec="seconds"),
               "steps": steps, "root": any(s["root"] for s in steps),
-              "undo_of": _undo_of, "turn": TURN}
+              "undo_of": _undo_of, "turn": TURN, "raw": raw}
     pending.append(action)
     _save(PENDING, pending)
     # An always-allow rule covers every step: run it now, through exactly
     # the same run_action as `y` (re-validated, checked, logged, undoable),
     # and hand the outcome back so the model reports it as done, not staged.
     # Undos are never auto-run: `u` staging one means he wants to look.
-    if AUTO_ALLOW and _undo_of is None and covered_by_rules(steps):
+    if AUTO_ALLOW and _undo_of is None and not raw and covered_by_rules(steps):
         res = run_action(aid, auto=True)
         out = {"ran": True, "auto_allowed": True, "action_id": aid,
                "steps": [s["what"] for s in steps], "ok": bool(res.get("ok")),
@@ -753,9 +830,15 @@ def _decided(aid, steps, decision):
            "verified": bool(res.get("verified")), "result": describe_result(res)}
     if res.get("rules_added"):
         out["always_allowed_now"] = res["rules_added"]
+    if res.get("raw"):
+        out.update(exit_code=res["results"][-1]["rc"] if res.get("results") else None,
+                   **raw_output(res.get("results") or []))
+        out.pop("verified", None)
+        out["result"] = "ran" if res.get("ok") else res.get("error")
     if res.get("ok"):
         out["note"] = ("He approved it and it RAN" + (" — checked, it took effect"
-                       if res.get("verified") else "") + ". Report that; ctrl+z/rewind undoes it.")
+                       if res.get("verified") else "") + (". Report what the output shows."
+                       if res.get("raw") else ". Report that; ctrl+z/rewind undoes it."))
     else:
         out["error"] = f"he approved it but it FAILED: {res.get('error')}"
     return out
@@ -955,19 +1038,23 @@ def run_action(aid, auto=False):
         return {"error": f"no pending change {aid}"}
     # Re-check against the machine as it is NOW.
     try:
-        fresh = parse(" && ".join(s["shown"] for s in action["steps"]))
-    except Refused as e:
+        fresh = ([_raw_step(action["steps"][0]["shown"])] if action.get("raw")
+                 else parse(" && ".join(s["shown"] for s in action["steps"])))
+    except (Refused, NotListed) as e:
         _save(PENDING, [a for a in pending if a["id"] != action["id"]])
         return {"error": f"not run — no longer valid: {e}", "dropped": True}
     results, undo, no_undo, failure = [], [], [], None
     for step in fresh:
         rc, out = _exec(step)
         res = {"step": step["shown"], "rc": rc, "output": out[-1500:]}
+        if step.get("raw"):
+            res["full_output"] = out[-200_000:]
         results.append(res)
         if rc != 0:
             failure = f"step {len(results)} failed (exit {rc}): {out[-300:] or 'no output'}"
             break
-        res["verified"], res["check"] = _check(step)
+        res["verified"], res["check"] = ((None, "a free-form command isn't checked")
+                                         if step.get("raw") else _check(step))
         if res["verified"] is False:
             # It ran but didn't take effect, so its undo would act on a state
             # that doesn't exist: not recorded.
@@ -987,12 +1074,13 @@ def run_action(aid, auto=False):
              "no_undo": no_undo,
              "undo_note": next((s.get("undo_note") for s in fresh if s.get("undo_note")), None)}
     log = _load(LOG, [])
-    log.append(entry)
+    log.append({**entry, "results": [{k: v for k, v in r.items() if k != "full_output"}
+                                     for r in results]})
     _save(LOG, log[-LOG_KEEP:])
     _save(PENDING, [a for a in pending if a["id"] != action["id"]])
     return {"ok": ok, "id": action["id"], "steps_run": len(results),
             "steps_total": len(fresh), "undo": undo, "results": results,
-            "verified": verified, "unchecked": unchecked,
+            "verified": verified, "unchecked": unchecked, "raw": bool(action.get("raw")),
             **({"error": failure} if failure else {})}
 
 
@@ -1001,6 +1089,8 @@ def describe_result(res):
     verified', so rc 0 is never presented as proof."""
     if res.get("error"):
         return res["error"]
+    if res.get("raw"):
+        return "ran — a free-form command, so it isn't checked after"
     n = res.get("steps_run", 0)
     if res.get("verified"):
         return f"done — verified ({n} step{'s' * (n != 1)})"
@@ -1191,6 +1281,7 @@ def note_edit_applied(edit, target, backup, after):
                 "backup": str(backup), "old_string": edit["old_string"],
                 "new_string": edit["new_string"], "turn": edit.get("turn"),
                 "after_sha": hashlib.sha256(after.encode()).hexdigest(),
+                "mode": edit.get("mode"), "new_file": bool(edit.get("new_file")),
                 "applied": datetime.now().isoformat(timespec="seconds")})
     _save(EDITS_LOG, log[-LOG_KEEP:])
 
@@ -1224,7 +1315,8 @@ def rewind_plan(turn):
     for e in it["redone"]:
         plan["cannot"].append(f"change #{e['id']} was an undo of #{e['undo_of']} — not re-done")
     for e in reversed(it["edits"]):
-        plan["revert"].append(f"edit e{e['id']}: put {e['path']} back as it was")
+        plan["revert"].append(f"edit e{e['id']}: " + (f"remove the new file {e['path']}"
+                              if e.get("new_file") else f"put {e['path']} back as it was"))
     for a in it["pending"]:
         plan["discard"].append(f"waiting change a{a['id']}: "
                                + "; ".join(s["what"] for s in a["steps"])[:80])
@@ -1235,6 +1327,19 @@ def rewind_plan(turn):
 
 def _revert_edit(e):
     import hashlib
+    if e.get("mode") == "write":
+        try:
+            target = _jt()._write_path(e["abs_path"])
+        except ValueError as err:
+            return f"{e['path']}: {err}"
+        cur = target.read_text(errors="replace") if target.exists() else None
+        if cur is None or hashlib.sha256(cur.encode()).hexdigest() != e["after_sha"]:
+            return f"{e['path']} changed since — restore it by hand from {e['backup']}"
+        if e.get("new_file"):
+            target.unlink()                     # Johan created it; rewind removes it
+        else:
+            target.write_text(Path(e["backup"]).read_text())
+        return None
     try:
         target, _ = _jt()._edit_path(e["abs_path"])
     except ValueError as err:

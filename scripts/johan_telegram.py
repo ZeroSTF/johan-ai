@@ -583,7 +583,7 @@ RUN, ALWAYS, NO, APPLY = "✅ Run it", "♾ Always allow", "✖ No", "✅ Apply 
 
 def offer_approval(bot, chat, tool, result, more=0):
     """Buttons for a change Johan proposed this turn."""
-    if tool == "propose_edit":
+    if tool != "propose_action":
         text = f"*Edit waiting:* `{result.get('path')}`\n```\n{(result.get('diff') or '')[:700]}\n```"
         labels = [APPLY, NO]
         item = {"kind": "edit", "id": result["edit_id"]}
@@ -706,7 +706,7 @@ def run_chat_turn(bot, chat, progress=None):
             progress.on_tool(name, jp.failed_result(result))
         if name == "ask" and isinstance(result, dict) and result.get("asked"):
             state["asked"] = result
-        if name in ("propose_action", "propose_edit") and isinstance(result, dict) \
+        if name in ("propose_action", "propose_edit", "files") and isinstance(result, dict) \
                 and result.get("proposed"):
             state["proposals"].append((name, result))
         if name == "generate_image" and isinstance(result, dict) and result.get("path"):

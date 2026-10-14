@@ -188,7 +188,7 @@ VERBS = {
     "web_search": "searching the web", "fetch_page": "reading a page",
     "wikipedia": "checking Wikipedia", "latest_version": "checking versions",
     "run_command": "running a command",
-    "system_status": "checking the machine", "project_files": "reading files",
+    "system_status": "checking the machine", "project_files": "reading files", "files": "reading files",
     "memory": "checking memory",
     "search_jobs": "searching jobs", "get_job": "reading a job",
     "get_pipeline_stats": "counting jobs", "build_apply_queue": "building the queue",
@@ -465,7 +465,7 @@ class Turn(Vertical):
 def _picture(path):
     """A terminal picture built from pixels already in memory. Given a PATH,
     textual-image re-opens the file on every repaint, so deleting the file
-    (a chat delete, F5 x) crashed the next redraw. None if it can't load."""
+    (a chat delete, F4 x) crashed the next redraw. None if it can't load."""
     if TermImage is None:
         return None
     try:
@@ -531,7 +531,7 @@ class ImageCard(Vertical):
             img.styles.height = 26
             img.styles.width = "auto"
             yield img
-        yield Static(mk("[$text-muted]$p\n$w×$h · seed $s · $sec · ctrl+o opens it · F5 gallery[/]",
+        yield Static(mk("[$text-muted]$p\n$w×$h · seed $s · $sec · ctrl+o opens it · F4 gallery[/]",
                         p=(r.get("prompt") or "")[:160], w=str(r.get("width")),
                         h=str(r.get("height")), s=str(r.get("seed")), sec=f"{r.get('seconds')}s"),
                      classes="imagecap")
@@ -598,7 +598,7 @@ class Welcome(Vertical):
             import johan_images as ji
             imgs = len(ji.list_images(500))
             if imgs:
-                lines.append(f"[$accent]●[/] {imgs} image{'s' * (imgs > 1)} drawn [$text-muted]· F5[/]")
+                lines.append(f"[$accent]●[/] {imgs} image{'s' * (imgs > 1)} drawn [$text-muted]· F4[/]")
         except Exception:
             pass
         self.query_one("#w-state", Static).update("\n".join(lines))
@@ -720,7 +720,7 @@ HELP_MD = """\
 - `/draw <tags>` — draw now (anime); put `landscape` or `square` first to change shape
 - `/draw ~/pic.png <tags>` — redraw a picture; `/draw ~/pic.png 0.3 <tags>` changes
   it less, `0.9` more (default 0.6). Drag a file into the terminal to paste its path.
-  In Images (F5), `i` starts a redraw of the selected one
+  In Images (F4), `i` starts a redraw of the selected one
 - `/research <question>` — deep research, a few minutes, with sources
 - `/retry` — ask the last question again · `/copy` — copy the last answer
 - `/rewind` or `ctrl+z` — take back the last turn: drops it, reverts the changes and edits it
@@ -734,7 +734,7 @@ HELP_MD = """\
 
 ### Keys
 - `ctrl+p` — every action, searchable
-- `F2` history · `F3` jobs · `F5` images
+- `F2` history · `F3` jobs · `F4` images
 - Ask for a change in chat — “install vlc”, “set super+v to copyq” — Johan asks right there:
   `1` run · `2` run and always allow that exact kind (when it can be) · last = no · or type what
   you want instead · `esc` stops. Root steps open your system's password dialog. It then
@@ -832,7 +832,7 @@ def _side_effects(calls):
         elif name == "scratchpad" and (a.get("text") or a.get("clear")):
             out.append("the scratchpad note")
         elif name == "generate_image":
-            out.append("the image drawn (F5 → x deletes it)")
+            out.append("the image drawn (F4 → x deletes it)")
     return list(dict.fromkeys(out))
 
 
@@ -1226,13 +1226,13 @@ class JohanApp(App):
     """
 
     BINDINGS = [
-        # The footer shows only what isn't visible elsewhere: F3-F5 are
+        # The footer shows only what isn't visible elsewhere: F3-F4 are
         # printed on the tabs themselves, the rest is in F1 and ctrl+p.
         Binding("ctrl+q", "quit", "quit", show=False),
         Binding("f1", "help_me", "help"),
         Binding("f2", "history", "history"),
         Binding("f3", "jobs_tab", "jobs", show=False),
-        Binding("f5", "images_tab", "images", show=False),
+        Binding("f4", "images_tab", "images", show=False),
         Binding("escape", "interrupt", "stop", show=False),
         Binding("ctrl+n", "new_chat", "new chat"),
         Binding("ctrl+o", "open_last", "open", show=False),
@@ -1278,7 +1278,7 @@ class JohanApp(App):
                     yield ChatPane(id="chat")
                 with TabPane("Jobs [$text-disabled]F3[/]", id="tab-jobs"):
                     yield JobsPane(id="jobs")
-                with TabPane("Images [$text-disabled]F5[/]", id="tab-images"):
+                with TabPane("Images [$text-disabled]F4[/]", id="tab-images"):
                     yield ImagesPane(id="images")
             yield Sidebar()
         with Horizontal(id="promptbox"):
@@ -1970,7 +1970,7 @@ class JohanApp(App):
                 self.messages += [{"role": "user", "content": f"draw: {prompt}"},
                                   {"role": "assistant", "content": note}]
                 if self.query_one("#main", TabbedContent).active != "tab-chat":
-                    self.call_from_thread(self._toast, "your image is ready — F5", "drawn")
+                    self.call_from_thread(self._toast, "your image is ready — F4", "drawn")
         except Exception as e:
             self.call_from_thread(self._note, f"drawing failed: {e}", "err")
         finally:
