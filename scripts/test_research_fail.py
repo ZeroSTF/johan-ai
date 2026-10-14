@@ -71,6 +71,13 @@ try:
     check("…the model's instruction never reaches him", "Say so" not in ans)
     check("…and the one-turn note is not kept in history",
           not any("Deep research failed" in m.get("content", "") for m in msgs))
+    asked = []
+    ja._research.deep_research = lambda q, **k: asked.append(q) or {"error": "nothing readable"}
+    ja.run_turn([{"role": "system", "content": "s"},
+                 {"role": "user", "content": "how does async work in rust"},
+                 {"role": "assistant", "content": "futures and executors…"},
+                 {"role": "user", "content": "dig into that more thoroughly"}])
+    check("a research follow-up researches what 'that' was", asked and "rust" in asked[0])
     ja._research.deep_research = lambda q, **k: {"error": "stopped — you pressed esc"}
     seen.clear()
     ans = ja.run_turn([{"role": "system", "content": "s"}, {"role": "user", "content": LONG}])

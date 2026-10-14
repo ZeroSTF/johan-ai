@@ -760,7 +760,7 @@ FAILED_NOTE = ("Deep research failed this time ({err}). Say so in one short line
                "which parts are your own knowledge rather than looked up.")
 
 
-def _maybe_research(q, on_tool, on_delta, should_stop):
+def _maybe_research(q, on_tool, on_delta, should_stop, messages=None):
     """Run deep_research directly when he explicitly asks for it.
 
     Code decides, not tool selection: asked "research this properly: ...",
@@ -785,7 +785,9 @@ def _maybe_research(q, on_tool, on_delta, should_stop):
         pass
     # Progress streams into the answer bubble; the returned report replaces it.
     progress = (lambda m: on_delta(f"_{m}_\n")) if on_delta else None
-    res = _research.deep_research(q, on_progress=progress, should_stop=should_stop)
+    # "dig into that more thoroughly": research what "that" was, not the words.
+    topic = _skills._match_text(messages or [], q)
+    res = _research.deep_research(topic, on_progress=progress, should_stop=should_stop)
     notify_tool(on_tool, "deep_research", {"question": q}, res)
     if res.get("error"):
         if "stopped" in res["error"]:
@@ -833,7 +835,7 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
                                           should_stop=should_stop)
     start = len(messages)
     q = _last_user_message(messages)
-    report = _maybe_research(q, on_tool, on_delta, should_stop)
+    report = _maybe_research(q, on_tool, on_delta, should_stop, messages)
     note = None
     if report is MAKE_NOTE or isinstance(report, dict):
         note = report if isinstance(report, dict) else {"role": "system", "content": MAKE_NOTE}
