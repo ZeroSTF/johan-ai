@@ -737,7 +737,7 @@ def scratchpad_write(text, append=False):
     """Set or extend the working-notes scratchpad."""
     text = (text or "").strip()
     if not text:
-        return {"error": "nothing to write — use scratchpad_clear to empty it"}
+        return {"error": "nothing to write — use scratchpad(clear=true) to empty it"}
     current = scratchpad_read()
     new = f"{current}\n{text}".strip() if (append and current) else text
     truncated = len(new) > SCRATCHPAD_MAX
@@ -1053,6 +1053,40 @@ def _blocked(problem):
     return {"error": problem, "blocked": True}
 
 
+# Characters a shell only treats specially when UNQUOTED. Inside quotes (or
+# after a backslash) they are swapped for private-use stand-ins before
+# splitting and put back after globbing/operator splitting: `find -name "*.py"`
+# had its pattern expanded against the working folder (scripts/ is full of
+# .py), find got a list of filenames, failed, and the model looped six times.
+_LITERAL = {c: chr(0xE000 + i) for i, c in enumerate("*?[|;&")}
+_UNLITERAL = {v: k for k, v in _LITERAL.items()}
+
+
+def _protect_quoted(command):
+    out, quote, i = [], None, 0
+    while i < len(command):
+        ch = command[i]
+        if ch == "\\" and quote != "'" and i + 1 < len(command):
+            nxt = command[i + 1]
+            out.append(_LITERAL[nxt] if nxt in _LITERAL else ch + nxt)
+            i += 2
+            continue
+        if quote:
+            if ch == quote:
+                quote = None
+            out.append(_LITERAL.get(ch, ch))
+        else:
+            if ch in "'\"":
+                quote = ch
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _restore_literal(arg):
+    return "".join(_UNLITERAL.get(c, c) for c in arg)
+
+
 def run_command(command, timeout=20):
     """Run a read-only shell command. Output is paged, not truncated.
 
@@ -1063,7 +1097,7 @@ def run_command(command, timeout=20):
     import shlex
     if isinstance(command, str):
         try:
-            argv = shlex.split(command)
+            argv = shlex.split(_protect_quoted(command))
         except ValueError as e:
             return _blocked(f"could not parse command: {e}")
     else:
@@ -1126,7 +1160,7 @@ def run_command(command, timeout=20):
                     out_stage.extend(hits or [arg])
                 else:
                     out_stage.append(arg)
-            expanded.append(out_stage)
+            expanded.append([_restore_literal(a) for a in out_stage])
         stages = expanded
 
         # Validate EVERY stage — `cat file | rm -rf ~` must die on stage two.

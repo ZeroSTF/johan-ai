@@ -114,11 +114,22 @@ def _shown_by_code(content):
     return content.startswith('{"count": ') and '"pictures": [' in content[:40]
 
 
+def _failed_only(content):
+    """A result that is nothing but an error carries no facts to check
+    against: "what skills do you have?" + one failed call was judged
+    "not backed" and a correct self-description was rewritten into nonsense."""
+    try:
+        d = json.loads(content)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(d, dict) and set(d) <= {"error", "blocked", "hint", "seconds"}
+
+
 def _evidence(messages, start):
-    """Tool results added to the conversation since `start`."""
+    """Successful tool results added to the conversation since `start`."""
     parts = [m["content"][:PER_RESULT_CHARS] for m in messages[start:]
              if m.get("role") == "tool" and m.get("content")
-             and not _shown_by_code(m["content"])]
+             and not _shown_by_code(m["content"]) and not _failed_only(m["content"])]
     return "\n".join(parts)[:EVIDENCE_CHARS]
 
 

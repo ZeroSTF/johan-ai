@@ -213,6 +213,21 @@ check("~ is expanded (no shell does it)", _jt.run_command("ls ~/johan/scripts")
       .get("command", "").startswith("ls /home/"), True)
 check("~/.ssh still refused after expansion", bool(_err("cat ~/.ssh/id_rsa")), True)
 check("2> /dev/null (spaced) is stripped", _err("ls /tmp 2> /dev/null") is None, True)
+# A quoted pattern is the program's, not ours to expand: `find -name "*.py"`
+# run from scripts/ became `find -name apply_queue.py embed_server.py ...`.
+import os as _os
+_here = _os.path.dirname(_os.path.abspath(__file__))
+check("quoted -name \"*.py\" reaches find unexpanded",
+      "test_matching.py" in _jt.run_command(f'find {_here} -maxdepth 1 -name "*matching*.py"')
+      .get("output", ""), True)
+check("escaped \\( and quoted globs work together",
+      "test_matching.py" in _jt.run_command(
+          f'find {_here} -maxdepth 1 -type f \\( -name "*.sh" -o -name "test_match*" \\)')
+      .get("output", ""), True)
+check("an unquoted glob is still expanded", "test_matching.py" in
+      _jt.run_command(f"ls {_here}/test_match*").get("output", ""), True)
+check("a quoted | is grep's, not a pipe", _jt.run_command(f"grep -c 'zzq|zzr' {_here}/test_matching.py")
+      .get("exit_code"), 0)
 check("2>&1 is stripped", _err("ls /tmp 2>&1") is None, True)
 check("&& chains allowlisted commands", _err("echo a && echo b") is None, True)
 check("|| chains allowlisted commands", _err("echo a || echo b") is None, True)

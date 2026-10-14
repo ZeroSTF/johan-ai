@@ -652,7 +652,8 @@ def execute_tool(call, seen, hop, user_message, should_stop=None):
         fn = None
     if not fn:
         if repeat is None:
-            result = {"error": f"unknown tool {name}"}
+            result = {"error": f"unknown tool {name} — the tools are: "
+                               f"{', '.join(sorted(DISPATCH))}"}
     else:
         try:
             extra = {"should_stop": should_stop} if should_stop and name in STOPPABLE else {}
@@ -1222,8 +1223,8 @@ def prime_with_memories(system_prompt, limit=8):
         notes = ""
     if notes:
         out = (f"{out}\nYour working notes for what you are currently doing "
-               f"(scratchpad — update with `scratchpad_write`, wipe with "
-               f"`scratchpad_clear` when the task is done):\n{notes}\n")
+               f"(update with `scratchpad(text=...)`, wipe with "
+               f"`scratchpad(clear=true)` when the task is done):\n{notes}\n")
     return out
 
 

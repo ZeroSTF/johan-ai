@@ -79,6 +79,17 @@ finally:
     (jd.decide, ja._research.deep_research, ja.call_model, ja.log_tool_call,
      ja.VERIFY_ANSWERS, ja._skills.inject, ja._plan.reask_as_tool) = real
 
+import johan_steps as jst        # noqa: E402
+turn = [{"role": "user", "content": "what skills do you have?"},
+        {"role": "tool", "content": '{"error": "unknown tool scratchpad_clear"}'}]
+check("a failed call is not evidence (a good self-description was 'corrected')",
+      jst._evidence(turn, 0) == "")
+turn.append({"role": "tool", "content": '{"count": 0}'})
+check("…a real result still is", jst._evidence(turn, 0) == '{"count": 0}')
+check("the prompt never names tools that no longer exist",
+      "scratchpad_clear" not in ja.prime_with_memories(ja.SYSTEM_PROMPT)
+      and "scratchpad_write" not in ja.prime_with_memories(ja.SYSTEM_PROMPT))
+
 for k, ok in results.items():
     print(f"{'ok  ' if ok else 'FAIL'}  {k}")
 bad = [k for k, ok in results.items() if not ok]
