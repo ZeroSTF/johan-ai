@@ -17,6 +17,7 @@ general assistant with that as one of its jobs.
 johan                     open the app
 johan "how much disk space is left?"   ask once and exit
 johan --continue          reopen the last conversation
+johan --resume            pick a past conversation (or --resume <id>)
 ```
 
 Type and press **enter** to send. **shift+enter** (or ctrl+j) starts a new

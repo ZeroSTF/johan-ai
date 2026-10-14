@@ -1230,13 +1230,15 @@ def log_session(messages):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", help="single message, print the reply, exit")
-    ap.add_argument("--continue", dest="cont", action="store_true",
+    ap.add_argument("--continue", "-c", dest="cont", action="store_true",
                     help="resume the previous conversation")
+    ap.add_argument("--resume", "-r", nargs="?", const="", default=None,
+                    help="a one-shot answer inside that conversation (no id: the last)")
     args = ap.parse_args()
 
     messages = None
-    if args.cont:
-        messages = load_session()
+    if args.cont or args.resume is not None:
+        messages = load_session(args.resume or None)
         if messages:
             # Refresh the system prompt rather than replaying a stale one, so
             # prompt edits and newly stored memories take effect on resume.

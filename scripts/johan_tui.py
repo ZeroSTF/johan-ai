@@ -28,6 +28,7 @@ Design notes worth keeping (each one cost real time once):
     johan             open this
     johan "question"  one-shot answer, no UI
     johan --continue  reopen the last conversation
+    johan --resume    pick a past conversation (or --resume <id>)
 """
 
 import dataclasses
@@ -1419,9 +1420,11 @@ class JohanApp(App):
     URL_RE = re.compile(r"https?://[^\s`\)\]<>\"']+")
     FILE_RE = re.compile(r"(/[^\s`\)\]<>\"']+\.(?:pdf|png))")
 
-    def __init__(self, resume=False):
+    def __init__(self, resume=False, pick=False, session=None):
         super().__init__()
         self.resume = resume
+        self.pick = pick          # --resume: open the history picker
+        self.session_arg = session  # --resume <id>: open that chat
         self.messages = None
         self.busy = False
         self.busy_label = ""
@@ -1498,6 +1501,10 @@ class JohanApp(App):
         self._refresh_sidebar()
         self.query_one("#prompt").focus()
         self.warm_up()
+        if self.session_arg:
+            self._load_session(self.session_arg)
+        elif self.pick:
+            self.call_after_refresh(self.action_history)
         self.set_timer(0.5, self._show_backlog)    # changes waiting from earlier
 
     def _fresh(self):
@@ -2702,9 +2709,19 @@ class JohanApp(App):
 
 
 def main():
-    resume = "--continue" in sys.argv
+    args = sys.argv[1:]
+    resume = "--continue" in args or "-c" in args
+    pick, session = False, None
+    for flag in ("--resume", "-r"):
+        if flag in args:
+            i = args.index(flag)
+            nxt = args[i + 1] if i + 1 < len(args) else ""
+            if nxt and not nxt.startswith("-"):
+                session = nxt
+            else:
+                pick = True
     try:
-        JohanApp(resume=resume).run()
+        JohanApp(resume=resume, pick=pick, session=session).run()
     finally:
         # Every exit path frees the GPU: the chat model and the image engine.
         ja.release_model()
