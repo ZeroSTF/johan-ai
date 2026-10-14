@@ -98,6 +98,32 @@ try:                               # real pictures in WezTerm/kitty/sixel termin
 except Exception:                  # noqa: BLE001
     TermImage = None
 
+
+def _sixel_defs_first(encode):
+    """textual-image defines each colour register the first time it's used,
+    mid-image. WezTerm (20240203) draws those images with a bright green line
+    on top and stray stripes; with every definition moved up front, before
+    the first pixel, they're clean. Same bytes otherwise."""
+    import re
+    define = re.compile(r"(#\d+);2;\d+;\d+;\d+")
+
+    def wrapped(*a, **k):
+        s = encode(*a, **k)
+        defs = "".join(m.group(0) for m in define.finditer(s))
+        body = define.sub(r"\1", s)
+        start = body.find("#", body.find("q"))
+        return body if start < 0 else body[:start] + defs + body[start:]
+    return wrapped
+
+
+try:
+    import textual_image.renderable.sixel as _rs
+    import textual_image.widget.sixel as _ws
+    _ws.image_to_sixels = _sixel_defs_first(_ws.image_to_sixels)
+    _rs.image_to_sixels = _sixel_defs_first(_rs.image_to_sixels)
+except Exception:                  # noqa: BLE001
+    pass
+
 ROOT = Path.home() / "johan"
 THEMES = ["johan", "tokyo-night", "catppuccin-mocha", "nord", "gruvbox", "textual-light"]
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
