@@ -87,7 +87,7 @@ CONTROLNET = "control-lora-canny-rank128.safetensors"
 CONTROL_STRENGTH = 0.8
 IPADAPTER = "ip-adapter-plus_sdxl_vit-h.safetensors"
 CLIP_VISION = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
-IPADAPTER_WEIGHT = 0.7
+IPADAPTER_WEIGHT = 0.4          # 0.6+ washed out and duplicated her; 0.4 to 70% of the steps kept her
 
 # ---- reading the reference into tags (WD tagger, CPU, its own process)
 TAGGER = ROOT / "scripts/tag_image.py"
@@ -114,6 +114,7 @@ _COLOURS = {"red", "blue", "green", "yellow", "orange", "purple", "pink", "black
             "two-tone", "gradient", "streaked", "lavender", "gold", "golden"}
 
 
+_COUNT = re.compile(r"\d\+?(girls?|boys?|others?)|no humans|multiple (girls|boys)|solo")
 # His tags naming a place or time: then the reference's own background goes
 # ("night, city street" on a white-background figure). Whole words only.
 _SCENE = re.compile(r"\b(background|scenery|street|city|room|bedroom|classroom|sky|night|"
@@ -153,11 +154,14 @@ def merge_reference_tags(prompt, tags):
     opposite = {"day": "night", "night": "day", "indoors": "outdoors", "outdoors": "indoors",
                 "smile": "frown", "open mouth": "closed mouth", "closed mouth": "open mouth"}
     new_scene = bool(_SCENE.search(prompt))
+    his_count = any(_COUNT.fullmatch(t.lower()) for t in his)
     keep = []
     for t in tags.get("character", []) + tags.get("general", []):
         tl = t.lower()
         w = _words(tl)
         if tl in _REF_SKIP or tl in his_l:
+            continue
+        if his_count and _COUNT.fullmatch(tl):        # he said who: "1boy" replaces "1girl"
             continue
         if new_scene and (w[-1] == "background" or tl in ("indoors", "outdoors", "scenery")):
             continue
@@ -402,7 +406,7 @@ def _workflow(positive, negative, width, height, seed, steps, ref=None, strength
             wf["32"] = {"class_type": "IPAdapterAdvanced",
                         "inputs": {"model": ["4", 0], "ipadapter": ["30", 0], "image": ["11", 0],
                                    "weight": IPADAPTER_WEIGHT, "weight_type": "linear",
-                                   "combine_embeds": "concat", "start_at": 0.0, "end_at": 1.0,
+                                   "combine_embeds": "concat", "start_at": 0.0, "end_at": 0.7,
                                    "embeds_scaling": "V only", "clip_vision": ["31", 0]}}
             wf["8"]["inputs"]["model"] = ["32", 0]
             del wf["12"]
@@ -574,10 +578,11 @@ TOOL = {"type": "function", "function": {
     # A small model copies examples literally — describe the format instead.
     "description": (
         "Draw a picture on his GPU (uncensored, ~40 s, anime/illustration). "
-        "`prompt` is danbooru tags — first who it is (1boy / 1girl / no humans — match "
-        "the subject's real sex), a known character as `name, series`, then ONLY the "
-        "details he gave or you looked up; add nothing else. A picture he points at goes in "
-        "`reference` to redraw it. Tell him where it saved; ctrl+o opens it."),
+        "`prompt` is danbooru tags. New picture: who is in it first — `no humans` for "
+        "places, animals and things; 1girl/1boy for people (their real sex); a known "
+        "character as `name, series` — then ONLY details he gave or you looked up. "
+        "Redraw: `reference` = the picture's path, and ONLY the change he asked for (the "
+        "picture is read automatically). Tell him where it saved; ctrl+o opens it."),
     "parameters": {"type": "object", "properties": {
         "prompt": {"type": "string"},
         "size": {"type": "string", "enum": ["portrait", "landscape", "square"]},

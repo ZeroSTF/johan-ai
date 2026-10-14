@@ -39,6 +39,12 @@ check("a new scene drops the old background", "white background" not in m
 check("'night' drops 'day'", ", day" not in m)
 check("'backpack' is not a scene ('back' ≠ background)", "white background" in merge("backpack", GIRL))
 check("no tags (tagger missing): prompt unchanged", merge("red hair", None) == "red hair")
+m = merge("1boy, knight", {"general": ["1girl", "solo", "maid"]})
+check("his '1boy' replaces the reference's '1girl' / 'solo'", "1girl" not in m and "solo" not in m
+      and "maid" in m)
+check("no person tag from him: the reference's stays", "1girl" in merge("knight", GIRL))
+check("the tool says places/animals are `no humans`, not a forced 1girl",
+      "no humans" in ji.TOOL["function"]["description"])
 check("a duplicate of his own tag isn't added twice", merge("smile", GIRL).count("smile") == 1)
 check("at most REF_TAGS_MAX tags from the reference",
       len(merge("x", {"general": [f"tag{i}" for i in range(60)]}).split(", ")) == ji.REF_TAGS_MAX + 1)

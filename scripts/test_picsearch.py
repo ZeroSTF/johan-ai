@@ -320,7 +320,7 @@ def main():
 
 async def tui_checks():
     """The card in the real app: pick a picture, save it, open it and its
-    page, and hand it to /draw — without a model, a gallery or ~/Pictures."""
+    page, and attach it as a reference — without a model, a gallery or ~/Pictures."""
     import johan_assistant as ja
     import johan_tui as tui
     tui.JohanApp._show_backlog = lambda self, intro=True: None
@@ -335,7 +335,9 @@ async def tui_checks():
     saved = {(tui, "open_target"): tui.open_target, (tui, "SAVED_PICTURES"): tui.SAVED_PICTURES,
              (tui.JohanApp, "warm_up"): tui.JohanApp.warm_up,
              (tui.Sidebar, "refresh_state"): tui.Sidebar.refresh_state,
-             (ja, "save_session"): ja.save_session, (ja, "log_session"): ja.log_session}
+             (ja, "save_session"): ja.save_session, (ja, "log_session"): ja.log_session,
+             (tui._attach, "UPLOADS"): tui._attach.UPLOADS}
+    tui._attach.UPLOADS = tmp / "uploads"
     tui.open_target = lambda t: opened.append(str(t)) or True
     tui.SAVED_PICTURES = tmp / "saved"
     tui.JohanApp.warm_up = lambda self: None
@@ -361,9 +363,11 @@ async def tui_checks():
                   opened[-2:] == [pics[1]["path"], "https://site1.org/page"])
             await pilot.press("3")
             await pilot.press("r")
-            box = app.query_one("#prompt")
-            check("r puts /draw <that picture> in the prompt",
-                  box.value == f"/draw {pics[2]['path']} " and box.has_focus)
+            await pilot.pause()
+            check("r attaches that picture (a chip, ready for 'as a knight')",
+                  len(app.attachments) == 1 and Path(app.attachments[0]).exists()
+                  and str(tmp / "uploads") in app.attachments[0]
+                  and app.query_one("#prompt").has_focus)
     finally:
         for (obj, name), val in saved.items():
             setattr(obj, name, val)

@@ -686,10 +686,10 @@ class WebPicsCard(Vertical, can_focus=True):
         p = self._pic()
         if not p:
             return
-        box = self.app.query_one("#prompt")
-        box.value = f"/draw {_quote_path(p['path'])} "
-        box.cursor_position = len(box.value)
-        box.focus()
+        # Attached like a pasted picture: he says what to change in words
+        # ("as a knight", "at night"), or `/draw <tags>` draws straight away.
+        if self.app.attach_paths([p["path"]]):
+            self.app._toast("attached — say what to change, or /draw <tags>", "reference")
 
     def file_gone(self):
         """Same guard as ImageCard: a picture whose file vanished must not be

@@ -167,16 +167,35 @@ in the input box to edit and resend.
 - Or just ask in chat: "draw me a cat astronaut".
 - About 30–60 s per image. The chat model steps out of the GPU while it draws.
 
-**Redraw a picture:**
-```
-/draw ~/Pictures/photo.jpg 0.6 golden hour, warm light
-```
-Drag a file into the terminal to paste its path. The number (0.2–0.95,
-default 0.6) is how much changes: 0.3 keeps it almost the same, 0.7+ for big
-changes like day → night.
+**Redraw a picture:** paste it (ctrl+v), attach it (ctrl+f), or drag it into
+the terminal, then say what to change — "as a knight", "make it night",
+"same character in a cafe". Or `/draw <tags>` with it attached.
+Johan reads the picture into tags first, so only the change needs saying.
+Three ways to use it, picked from what you ask:
+- **lines** (default) — same pose and outline, everything else redrawn:
+  "make it night", "this photo as anime", "colour this sketch".
+- **character** — the same character in a new scene or pose.
+- **look** — a small touch-up that keeps colours and layout. Giving a
+  number picks this: `/draw ~/pic.png 0.3 golden hour`.
+
+A photo of a real person is never redrawn sexually.
 
 **F4 Images:** `o` open, `v` variation, `u` reuse the prompt, `i` redraw
 this one, `x` twice to delete.
+
+### Pictures from the web
+
+"show me pictures of red pandas" → Johan searches, looks at each picture to
+drop the ones that don't match, and shows the rest with their sources (on
+Telegram, as an album). On a picture: `s` saves it to `~/Pictures/johan`,
+`o` opens it, `w` opens its page, `r` attaches it to redraw from.
+
+### Attach pictures
+
+ctrl+v pastes a picture from the clipboard (a screenshot, "copy image" in a
+browser), ctrl+f or `/attach` opens a file picker, and dragging a picture in
+attaches it. Johan can see attached pictures: "what's this error?", "what
+game is this?". Backspace on an empty prompt removes one.
 
 ### Research
 
