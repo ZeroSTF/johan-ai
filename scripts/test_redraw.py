@@ -51,7 +51,7 @@ check("at most REF_TAGS_MAX tags from the reference",
 
 PHOTO = {"general": ["1boy", "realistic", "suit"]}
 DRAWN = {"general": ["1girl", "maid"]}
-refuse = ji.reference_refusal
+
 check("…'photo (medium)' counts as a photo", refuse("lingerie", {"general": ["photo (medium)"]}))
 check("drawn reference + same request: not this guard's business", refuse("nude", DRAWN) is None)
 check("real photo + ordinary request: allowed", refuse("anime, night", PHOTO) is None)
@@ -80,6 +80,46 @@ ji.COMFY = real
 check("look needs nothing extra", ji.keep_available("look") is None)
 props = ji.TOOL["function"]["parameters"]["properties"]
 check("the tool offers keep = lines/look/character", props["keep"]["enum"] == list(ji.KEEP_MODES))
+
+# A drawing ends the turn in code: no model reload just to say "here it is"
+# (measured 29 s of the 70 s turn), no fact check, a background re-warm.
+import johan_assistant as ja        # noqa: E402
+model_calls, warmed = [], []
+
+
+def fake_model(messages, **k):
+    model_calls.append(len(messages))
+    if len(model_calls) == 1:
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "generate_image",
+                                             "arguments": {"prompt": "red panda"}}}]}
+    return {"role": "assistant", "content": "a model answer"}
+
+
+real = (ja.call_model, ja.DISPATCH["generate_image"], ja.rewarm, ja.log_tool_call,
+        ja._maybe_research, ja._skills.inject)
+ja.call_model = fake_model
+ja.DISPATCH["generate_image"] = lambda **kw: {"path": "/x/panda.png", "seconds": 31.0}
+ja.rewarm = lambda m: warmed.append(len(m))
+ja.log_tool_call = lambda *a, **k: None
+ja._maybe_research = lambda *a, **k: None
+ja._skills.inject = lambda *a, **k: None
+try:
+    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "draw a red panda"}]
+    ans = ja.run_turn(msgs)
+    check("after a drawing, no second model call", len(model_calls) == 1)
+    check("…the answer names the file", "/x/panda.png" in ans and "ctrl+o" in ans)
+    check("…and the model reloads in the background", warmed)
+    check("…nothing to fact-check", ja.ANSWERED_BY_CODE)
+    model_calls.clear()
+    ja.DISPATCH["generate_image"] = lambda **kw: {"error": "engine failed"}
+    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "draw a red panda"}]
+    ans = ja.run_turn(msgs)
+    check("a FAILED drawing still goes back to the model to explain", len(model_calls) == 2
+          and ans == "a model answer")
+finally:
+    (ja.call_model, ja.DISPATCH["generate_image"], ja.rewarm, ja.log_tool_call,
+     ja._maybe_research, ja._skills.inject) = real
 
 for k, ok in results.items():
     print(f"{'ok  ' if ok else 'FAIL'}  {k}")
