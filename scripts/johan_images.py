@@ -82,7 +82,13 @@ DEFAULT_STRENGTH = 0.6
 #   look      — classic img2img at `strength`. Keeps colours and layout; at
 #               0.6 it ignored "night, city" entirely. Small touch-ups only.
 #   character — IP-Adapter: who/what style it is, not where the lines are.
-KEEP_MODES = ("lines", "look", "character")
+#   add       — someone or something joins the picture. The picture goes on
+#               the left of a wider canvas (padded with its own border colour —
+#               a grey pad drew a seam), its lines are kept, and each side gets
+#               its OWN prompt: one prompt for everyone drew extra copies of
+#               her, a noise-masked inpaint drew a cropped torso at 6 steps.
+KEEP_MODES = ("lines", "look", "character", "add")
+ADD_OVERLAP = 96                # px the two sides' prompts share, so the halves blend
 CONTROLNET = "control-lora-canny-rank128.safetensors"
 CONTROL_STRENGTH = 0.8
 IPADAPTER = "ip-adapter-plus_sdxl_vit-h.safetensors"
@@ -131,6 +137,71 @@ def describe_reference(path, timeout=90):
 
 def _words(tag):
     return tag.lower().split()
+
+
+_PEOPLE = re.compile(r"\d\+?(girl|boy|other)s?")
+_BACKDROP = re.compile(r"(\w+ )*background|scenery|indoors|outdoors")
+# Framing: both sides of an added-to picture should be shot the same way.
+_FRAMING = {"full body", "upper body", "cowboy shot", "portrait", "close-up", "standing", "sitting"}
+
+
+def add_prompts(prompt, tags):
+    """Adding someone to a picture: (tags for the picture's own side, tags
+    for the newcomer's side). Measured: one prompt describing everyone drew
+    extra copies of the original (her 24 tags outweighed his 3), so each side
+    gets only its own subject. The background — the reference's, or a scene
+    he names — goes on both sides, or each half invents its own room."""
+    ref = (tags or {}).get("character", []) + (tags or {}).get("general", [])
+    ref = [t for t in ref if t.lower() not in _REF_SKIP]
+    # The model sees the picture and describes her too ("1boy in black suit
+    # standing next to 1girl blue hair maid…") — on the newcomer's side that
+    # draws a second her. Split at the joins and drop the pieces that are
+    # about who is already there: two or more of her own tags, or a pronoun.
+    looks = [t.lower() for t in ref if t.lower() not in _FRAMING
+             and not _BACKDROP.fullmatch(t.lower()) and not _COUNT.fullmatch(t.lower())]
+    nouns = {"girl": "girls?|woman|women|lady", "boy": "boys?|man|men|guy",
+             "other": "person|people"}
+    kinds = {m.group(1) for m in (_PEOPLE.fullmatch(t.lower()) for t in ref) if m}
+    hers = "|".join(nouns[k] for k in kinds) or "$^"
+    his, after_join = [], False
+    for piece in re.split(r"(,|\+|\b(?:plus|next to|beside|alongside)\b)", prompt):
+        if re.fullmatch(r",|\+", piece):
+            after_join = False
+            continue
+        if re.fullmatch(r"plus|next to|beside|alongside", piece):
+            after_join = True
+            continue
+        piece = piece.strip(" .")
+        low = piece.lower()
+        if not piece or re.fullmatch(r"(?:and |with )?(?:her|him|them|she|he|it)", low):
+            continue
+        hits = sum(bool(re.search(rf"(?<!\w){re.escape(t)}(?!\w)", low)) for t in looks)
+        names_her = bool(re.search(rf"\b(?:{hers})\b", low))
+        # "…next to girl", "anime girl in a maid outfit": about her, not him
+        if hits >= 2 or (names_her and (hits or after_join)):
+            continue
+        his.append(piece)
+    scene = [t for t in his if _SCENE.search(t)]
+    backdrop = scene or [t for t in ref if _BACKDROP.fullmatch(t.lower())]
+    framing = [t for t in ref if t.lower() in _FRAMING]
+    old = [t for t in ref if t not in backdrop and not (scene and _BACKDROP.fullmatch(t.lower()))]
+    old = old[:REF_TAGS_MAX]
+    new = [t for t in his if t not in scene]
+    noun = next((m.group(1) for t in new
+                 for m in [re.search(r"\b(girl|woman|lady|boy|man|guy)\b", t.lower())] if m), None)
+    if noun and not any(_PEOPLE.fullmatch(t.lower()) for t in new):
+        # "boy in a black suit" is prose; without the 1boy tag the model drew
+        # a cropped torso beside a giant shoe.
+        new.insert(0, "1girl" if noun in ("girl", "woman", "lady") else "1boy")
+    if any(_PEOPLE.fullmatch(t.lower()) for t in new):
+        new += ["solo"] if "solo" not in new else []   # one newcomer, not two (seen at 648 px wide)
+        new += [t for t in framing if t not in new]   # shot like the original
+    elif new:
+        # A cat or a lamp: with nothing saying "no people", this model
+        # filled the empty side with a body.
+        new += [t for t in ("no humans", "full body") if t not in new]
+    join = lambda xs: ", ".join(dict.fromkeys(xs))
+    return join(old + backdrop), join(new + backdrop)
 
 
 def merge_reference_tags(prompt, tags):
@@ -204,6 +275,30 @@ def _size_for(img):
     """The preset whose shape is closest to the reference's."""
     ratio = img.width / img.height
     return min(SIZES, key=lambda k: abs(SIZES[k][0] / SIZES[k][1] - ratio))
+
+
+def _add_canvas(img):
+    """(landscape canvas with the picture on its left, the picture's width).
+    A wide picture is shrunk to ~58% of the canvas so there is room."""
+    from PIL import Image
+    w, h = SIZES["landscape"]
+    ratio = img.width / img.height
+    pw = min(round(h * ratio), int(w * 0.58)) // 8 * 8
+    ph = min(h, round(pw / ratio))
+    small = img.resize((pw, ph), Image.LANCZOS)
+    edge = [small.getpixel((x, y)) for x in (0, pw - 1) for y in range(0, ph, 16)]
+    bg = tuple(sorted(c[i] for c in edge)[len(edge) // 2] for i in range(3))
+    out = Image.new("RGB", (w, h), bg)
+    # Fade the picture's right and top edges into the pad: a hard edge is a
+    # line to Canny, and the drawing kept it as a seam.
+    fade = Image.new("L", (pw, ph), 255)
+    for i in range(32):
+        a = int(255 * i / 32)
+        fade.paste(a, (pw - 1 - i, 0, pw - i, ph))
+        if ph < h:
+            fade.paste(a, (0, i, pw - i, i + 1))
+    out.paste(small, (0, h - ph), fade)              # feet on the same floor
+    return out, pw
 
 
 def _upload(img):
@@ -333,7 +428,7 @@ def _spawn_watchdog(pid):
 # ------------------------------------------------------------------ workflow
 
 def _workflow(positive, negative, width, height, seed, steps, ref=None, strength=1.0,
-              model=None, keep="look"):
+              model=None, keep="look", regions=None):
     model = model or STYLES["anime"]
     wf = {
         "1": {"class_type": "UNETLoader",
@@ -381,6 +476,37 @@ def _workflow(positive, negative, width, height, seed, steps, ref=None, strength
                                    "start_percent": 0.0, "end_percent": 0.8, "vae": ["3", 0]}}
             wf["8"]["inputs"]["positive"] = ["22", 0]
             wf["8"]["inputs"]["negative"] = ["22", 1]
+        elif keep == "add":
+            # `ref` is the prepared canvas; `regions` = [(tags, x, width)].
+            # No prompt covers the whole canvas: a shared one drew a ghost
+            # third person between them.
+            wf["20"] = {"class_type": "Canny", "inputs": {"image": ["11", 0], "low_threshold": 0.3,
+                                                           "high_threshold": 0.7}}
+            wf["21"] = {"class_type": "ControlNetLoader", "inputs": {"control_net_name": CONTROLNET}}
+            last = None
+            for i, (text, x, w) in enumerate(regions or []):
+                n = 40 + 3 * i
+                wf[str(n)] = {"class_type": "CLIPTextEncode",
+                              "inputs": {"clip": ["2", 0], "text": f"{model['quality']}, {text}"}}
+                # Boxes, not soft masks: feathered masks (tried) drew a giant
+                # cropped figure and a second newcomer, and were 9 s slower.
+                wf[str(n + 1)] = {"class_type": "ConditioningSetArea",
+                                  "inputs": {"conditioning": [str(n), 0], "width": w, "height": height,
+                                             "x": x, "y": 0, "strength": 1.0}}
+                if last is None:
+                    last = [str(n + 1), 0]
+                else:
+                    wf[str(n + 2)] = {"class_type": "ConditioningCombine",
+                                      "inputs": {"conditioning_1": last, "conditioning_2": [str(n + 1), 0]}}
+                    last = [str(n + 2), 0]
+            wf["22"] = {"class_type": "ControlNetApplyAdvanced",
+                        "inputs": {"positive": last or ["5", 0], "negative": ["6", 0],
+                                   "control_net": ["21", 0], "image": ["20", 0],
+                                   "strength": CONTROL_STRENGTH, "start_percent": 0.0,
+                                   "end_percent": 0.8, "vae": ["3", 0]}}
+            wf["8"]["inputs"]["positive"] = ["22", 0]
+            wf["8"]["inputs"]["negative"] = ["22", 1]
+            del wf["12"]
         elif keep == "character":
             wf["30"] = {"class_type": "IPAdapterModelLoader", "inputs": {"ipadapter_file": IPADAPTER}}
             wf["31"] = {"class_type": "CLIPVisionLoader", "inputs": {"clip_name": CLIP_VISION}}
@@ -396,7 +522,7 @@ def _workflow(positive, negative, width, height, seed, steps, ref=None, strength
 
 def keep_available(keep):
     """None if this redraw mode's model files are installed, else why not."""
-    need = {"lines": [("controlnet", CONTROLNET)],
+    need = {"lines": [("controlnet", CONTROLNET)], "add": [("controlnet", CONTROLNET)],
             "character": [("ipadapter", IPADAPTER), ("clip_vision", CLIP_VISION)]}.get(keep, [])
     if keep == "character" and not (COMFY / "custom_nodes/ComfyUI_IPAdapter_plus").is_dir():
         return "the IP-Adapter node isn't installed"
@@ -429,15 +555,20 @@ def generate_image(prompt, size=None, seed=None, on_progress=None,
                if not (COMFY / "models" / d / f).exists()]
     if missing:
         return {"error": f"image model files missing: {', '.join(missing)}"}
-    ref_img = ref_path = ref_tags = None
+    ref_img = ref_path = ref_tags = regions = None
     if reference:
         ref_img, ref_path = _reference(reference, prompt)
         if ref_img is None:
             return {"error": ref_path}
         size = size if size in SIZES else _size_for(ref_img)
         keep = keep if keep in KEEP_MODES else ("look" if strength not in (None, "") else "lines")
+        if keep == "add" and keep_available(keep):
+            return {"error": f"can't add to a picture: {keep_available(keep)}"}
         if keep_available(keep):
             keep = "look"                     # always installed
+        if keep == "add":
+            ref_img, ref_w = _add_canvas(ref_img)
+            size = "landscape"
         ref_tags = describe_reference(ref_path)
         if reason:
             return {"error": reason}
@@ -461,7 +592,13 @@ def generate_image(prompt, size=None, seed=None, on_progress=None,
 
     # A redraw is told what the reference shows, or at higher strength the
     # content drifts toward whatever his few tags describe.
-    drawn = merge_reference_tags(prompt, ref_tags) if ref_tags else prompt
+    if keep == "add":
+        old_side, new_side = add_prompts(prompt, ref_tags)
+        regions = [(old_side, 0, ref_w + ADD_OVERLAP),
+                   (new_side, ref_w - ADD_OVERLAP, width - ref_w + ADD_OVERLAP)]
+        drawn = f"{prompt}, {old_side}" if old_side else prompt
+    else:
+        drawn = merge_reference_tags(prompt, ref_tags) if ref_tags else prompt
     positive = f"{model['quality']}, {drawn}"
 
     ref_name = None
@@ -470,8 +607,12 @@ def generate_image(prompt, size=None, seed=None, on_progress=None,
             ref_name = _upload(ref_img)
         except Exception as e:
             return {"error": f"couldn't hand the reference to the engine: {e}"}
-    wf = _workflow(positive, model["negative"], width, height, seed, STEPS,
-                   ref=ref_name, strength=strength or 1.0, model=model, keep=keep or "look")
+    negative = model["negative"]
+    if keep == "add":                      # the newcomer was drawn as a cropped torso
+        negative += ", close-up, cropped, out of frame, head out of frame"
+    wf = _workflow(positive, negative, width, height, seed, STEPS,
+                   ref=ref_name, strength=strength or 1.0, model=model, keep=keep or "look",
+                   regions=regions)
     try:
         r = requests.post(f"{URL}/prompt", json={"prompt": wf, "client_id": uuid.uuid4().hex},
                           timeout=30)
@@ -562,7 +703,8 @@ TOOL = {"type": "function", "function": {
         "places, animals and things; 1girl/1boy for people (their real sex); a known "
         "character as `name, series` — then ONLY details he gave or you looked up. "
         "Redraw: `reference` = the picture's path, and ONLY the change he asked for (the "
-        "picture is read automatically). Tell him where it saved; ctrl+o opens it."),
+        "picture is read automatically); adding someone to it is keep=add. Tell him where "
+        "it saved; ctrl+o opens it."),
     "parameters": {"type": "object", "properties": {
         "prompt": {"type": "string"},
         "size": {"type": "string", "enum": ["portrait", "landscape", "square"]},
@@ -570,7 +712,10 @@ TOOL = {"type": "function", "function": {
         "keep": {"type": "string", "enum": list(KEEP_MODES),
                  "description": "redraw: lines = same pose/outline, new everything else "
                                 "(default); look = small touch-up; character = same "
-                                "character, new scene"},
+                                "character, new scene; add = put someone/something NEW "
+                                "into the picture beside what's there — then `prompt` "
+                                "describes ONLY the newcomer (who is already there is read "
+                                "from the picture)"},
         "strength": {"type": "number", "description": "look only: 0.3 small tweak … 0.9"},
     }, "required": ["prompt"]}}}
 

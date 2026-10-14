@@ -139,7 +139,7 @@ async def pilot(tmp):
     stub(tui.Sidebar, "refresh_state", lambda self, messages=None: None)
     drawn = []
 
-    def fake_draw(self, prompt, size, seed, reference=None, strength=None, style="anime"):
+    def fake_draw(self, prompt, size, seed, reference=None, strength=None, style="anime", keep=None):
         drawn.append({"prompt": prompt, "reference": reference})
         self.call_later(self._finish)
     stub(tui.JohanApp, "draw_worker", fake_draw)

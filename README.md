@@ -172,12 +172,18 @@ in the input box to edit and resend.
 the terminal, then say what to change — "as a knight", "make it night",
 "same character in a cafe". Or `/draw <tags>` with it attached.
 Johan reads the picture into tags first, so only the change needs saying.
-Three ways to use it, picked from what you ask:
+Four ways to use it, picked from what you ask:
 - **lines** (default) — same pose and outline, everything else redrawn:
   "make it night", "this photo as anime", "colour this sketch".
 - **character** — the same character in a new scene or pose.
 - **look** — a small touch-up that keeps colours and layout. Giving a
   number picks this: `/draw ~/pic.png 0.3 golden hour`.
+- **add** — someone or something joins the picture: "add a boy in a suit
+  next to her", "put a cat beside him". The picture becomes wider, the
+  original stays on the left, the newcomer is drawn on the right in the same
+  scene.
+
+Put the mode first to choose it yourself: `/draw add 1boy, black hair, suit`.
 
 **F4 Images:** `o` open, `v` variation, `u` reuse the prompt, `i` redraw
 this one, `x` twice to delete.

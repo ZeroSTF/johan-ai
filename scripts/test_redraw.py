@@ -49,8 +49,53 @@ check("a duplicate of his own tag isn't added twice", merge("smile", GIRL).count
 check("at most REF_TAGS_MAX tags from the reference",
       len(merge("x", {"general": [f"tag{i}" for i in range(60)]}).split(", ")) == ji.REF_TAGS_MAX + 1)
 
-PHOTO = {"general": ["1boy", "realistic", "suit"]}
-DRAWN = {"general": ["1girl", "maid"]}
+# Adding someone: one prompt for everyone drew extra copies of her (her 24
+# tags outweighed his 3), so each side of the canvas gets its own.
+MAID = {"general": ["1girl", "solo", "maid", "blue hair", "full body", "standing",
+                    "white background", "simple background", "photo (medium)"]}
+old, new = ji.add_prompts("1boy, black hair, suit", MAID)
+check("add: her side keeps her (1girl, blue hair, maid)", "1girl" in old and "blue hair" in old)
+check("add: his 'black hair' never touches her side", "black hair" not in old)
+check("add: the newcomer's side has only him — no 'maid', no '1girl'",
+      "maid" not in new and "1girl" not in new and "1boy" in new)
+check("add: one newcomer ('solo' — 648 px drew two men once)", "solo" in new.split(", "))
+check("add: framed like her (full body)", "full body" in new)
+check("add: both sides share the background (else each half drew its own room)",
+      "white background" in old and "white background" in new)
+check("add: photo-medium tags dropped like any redraw", "photo (medium)" not in old)
+old, new = ji.add_prompts("1boy, night, city street", MAID)
+check("add: a scene he names replaces her background on BOTH sides",
+      "night" in old and "city street" in new and "white background" not in old + new)
+old, new = ji.add_prompts("1boy in black suit standing next to 1girl blue hair maid outfit", MAID)
+check("add: the model describing HER too (seen) is cut from his side",
+      new.startswith("1boy in black suit standing") and "maid" not in new)
+old, new = ji.add_prompts("girl with blue hair in a maid outfit, plus a boy with black hair beside her", MAID)
+check("add: prose with 'plus … beside her' keeps only the boy",
+      "boy with black hair" in new and "maid" not in new and "her" not in new.split(", "))
+old, new = ji.add_prompts("1girl, red hair, maid", MAID)
+check("add: a second maid girl is still allowed (one of her tags isn't 'her')",
+      new.startswith("1girl, red hair, maid"))
+old, new = ji.add_prompts("cat", MAID)
+check("add: a cat gets no humans + full body, no solo/standing", new == "cat, no humans, full body, white background, simple background")
+check("add: no tagger → just his tags", ji.add_prompts("1boy", None) == ("", "1boy, solo"))
+
+from PIL import Image        # noqa: E402
+canvas, pw = ji._add_canvas(Image.new("RGB", (832, 1216), (250, 250, 250)))
+check("add: a landscape canvas with the picture on the left",
+      canvas.size == ji.SIZES["landscape"] and pw < canvas.width // 2)
+check("add: padded with the picture's own border colour (a grey pad drew a seam)",
+      canvas.getpixel((canvas.width - 5, 5)) == (250, 250, 250))
+canvas, pw = ji._add_canvas(Image.new("RGB", (1600, 900), "red"))
+check("add: a wide picture is shrunk to leave room", pw <= canvas.width * 0.58
+      and canvas.getpixel((canvas.width - 5, canvas.height - 5)) == (255, 0, 0))
+regions = [("her", 0, 600), ("him", 500, 716)]
+wf = ji._workflow("p", "n", 1216, 832, 1, 6, ref="c.png", keep="add", regions=regions)
+areas = [n for n in wf.values() if n["class_type"] == "ConditioningSetArea"]
+check("add: one area prompt per side, nothing over the whole canvas",
+      len(areas) == 2 and wf["22"]["inputs"]["positive"] != ["5", 0]
+      and wf["8"]["inputs"]["positive"] == ["22", 0])
+check("add: her lines kept (Canny on the canvas)", wf["20"]["inputs"]["image"] == ["11", 0])
+check("add: drawn fresh (empty latent)", wf["7"]["class_type"] == "EmptyLatentImage")
 
 
 wf = ji._workflow("p", "n", 832, 1216, 1, 6, ref="r.png", strength=0.6, keep="lines")

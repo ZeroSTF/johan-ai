@@ -2267,12 +2267,19 @@ class JohanApp(App):
     # ------------------------------------------------------------ drawing
 
     def _draw(self, arg):
-        """/draw [landscape|square|portrait] [picture-path [strength]] tags"""
+        """/draw [landscape|square|portrait] [add|lines|look|character]
+        [picture-path [strength]] tags"""
         shown = arg
-        size, style = None, "anime"
-        first = arg.split(" ", 1)[0].lower()
-        if first in ("landscape", "square", "portrait"):
-            size, arg = first, (arg.split(" ", 1)[1] if " " in arg else "")
+        size, style, keep = None, "anime", None
+        for _ in range(2):                       # size and mode, either order
+            first = arg.split(" ", 1)[0].lower()
+            if first in ("landscape", "square", "portrait") and size is None:
+                size = first
+            elif first in ("add", "lines", "look", "character") and keep is None:
+                keep = first
+            else:
+                break
+            arg = arg.split(" ", 1)[1] if " " in arg else ""
         ref, strength, arg = _split_reference(arg)
         if not arg:
             return self._note("what should I draw? — /draw [picture] tags", "err")
@@ -2285,7 +2292,7 @@ class JohanApp(App):
         self._chat().add(UserMsg(f"/draw {shown}"))
         self.turn = self._chat().add(Turn())
         self._start_busy("redrawing" if ref else "drawing")
-        self.draw_worker(arg, size, None, ref, strength, style)
+        self.draw_worker(arg, size, None, ref, strength, style, keep=keep)
 
     @work(thread=True)
     def draw_worker(self, prompt, size, seed, reference=None, strength=None, style="anime",
