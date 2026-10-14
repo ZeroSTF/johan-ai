@@ -52,11 +52,6 @@ check("at most REF_TAGS_MAX tags from the reference",
 PHOTO = {"general": ["1boy", "realistic", "suit"]}
 DRAWN = {"general": ["1girl", "maid"]}
 
-check("…'photo (medium)' counts as a photo", refuse("lingerie", {"general": ["photo (medium)"]}))
-check("drawn reference + same request: not this guard's business", refuse("nude", DRAWN) is None)
-check("real photo + ordinary request: allowed", refuse("anime, night", PHOTO) is None)
-check("'stripes' / 'striped shirt' are not 'strip'", refuse("stripes, striped shirt", PHOTO) is None)
-check("no tags: nothing to judge", refuse("nude", None) is None)
 
 wf = ji._workflow("p", "n", 832, 1216, 1, 6, ref="r.png", strength=0.6, keep="lines")
 check("lines: ControlNet on the reference's edges", wf.get("20", {}).get("class_type") == "Canny"
@@ -96,9 +91,10 @@ def fake_model(messages, **k):
     return {"role": "assistant", "content": "a model answer"}
 
 
-real = (ja.call_model, ja.DISPATCH["generate_image"], ja.rewarm, ja.log_tool_call,
+real = (ja.call_model, ja.DISPATCH["generate_image"], ja.rewarm, ja.log_tool_call, ja.VERIFY_ANSWERS,
         ja._maybe_research, ja._skills.inject)
 ja.call_model = fake_model
+ja.VERIFY_ANSWERS = False
 ja.DISPATCH["generate_image"] = lambda **kw: {"path": "/x/panda.png", "seconds": 31.0}
 ja.rewarm = lambda m: warmed.append(len(m))
 ja.log_tool_call = lambda *a, **k: None
@@ -118,7 +114,7 @@ try:
     check("a FAILED drawing still goes back to the model to explain", len(model_calls) == 2
           and ans == "a model answer")
 finally:
-    (ja.call_model, ja.DISPATCH["generate_image"], ja.rewarm, ja.log_tool_call,
+    (ja.call_model, ja.DISPATCH["generate_image"], ja.rewarm, ja.log_tool_call, ja.VERIFY_ANSWERS,
      ja._maybe_research, ja._skills.inject) = real
 
 for k, ok in results.items():

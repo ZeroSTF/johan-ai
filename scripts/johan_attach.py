@@ -59,7 +59,22 @@ def clipboard_image(run=subprocess.run):
         return None
     kind = next((t for t in ("image/png", "image/jpeg", "image/webp", "image/bmp")
                  if t in targets), None)
+    # Some copiers name their format differently (image/x-png…); any image/*
+    # will do — PIL checks the bytes below.
+    kind = kind or next((t for t in targets if t.startswith("image/")), None)
     if kind is None:
+        # A copied picture FILE (file managers, some screenshot tools) comes
+        # as a list of file:// links, not pixels.
+        for t in ("x-special/gnome-copied-files", "text/uri-list"):
+            if t in targets:
+                try:
+                    text = run(["xclip", "-selection", "clipboard", "-t", t, "-o"],
+                               capture_output=True, timeout=3).stdout.decode(errors="replace")
+                except Exception:
+                    continue
+                for p in dropped_paths(text.replace("copy\n", "").replace("cut\n", "")) or []:
+                    if is_image(p):
+                        return Path(p)
         return None
     try:
         data = run(["xclip", "-selection", "clipboard", "-t", kind, "-o"],

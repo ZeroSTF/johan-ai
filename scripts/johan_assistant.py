@@ -778,6 +778,7 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
     import johan_steps
     LAST_LEARNED[:] = []
     LAST_CORRECTED[:] = []
+    ANSWERED_BY_CODE[:] = []
     if ENGINE == "steps":
         return johan_steps.run_turn_steps(messages, max_hops=max_hops,
                                           on_tool=on_tool, on_delta=on_delta,
@@ -802,7 +803,8 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
         return answer          # a question to him, not facts to verify
     # Small talk ending "code or game?" is conversation, not an ambiguous
     # request — re-asking it as options turned "good morning" into a menu.
-    if answer and not answer.startswith("(interrupted") and not _is_trivial(q):
+    if answer and not answer.startswith("(interrupted") and not _is_trivial(q) \
+            and not ANSWERED_BY_CODE:
         seen = {}
         asked = _plan.reask_as_tool(
             messages, q, answer, call_model=call_model, on_tool=on_tool,
@@ -810,7 +812,8 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
             execute=lambda c: execute_tool(c, seen, 0, q, should_stop))
         if asked:
             return _plan.render_ask(asked)
-    if VERIFY_ANSWERS and answer and not answer.startswith("(interrupted"):
+    if VERIFY_ANSWERS and answer and not answer.startswith("(interrupted") \
+            and not ANSWERED_BY_CODE:
         answer = johan_steps._verify_and_fix(messages, start, answer, should_stop)
     # A correction of how Johan behaves becomes a saved rule. Costs nothing
     # unless the word-boundary pre-filter fires; the UIs show LAST_LEARNED.
@@ -881,8 +884,56 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
             text = _plan.render_ask(asked)
             messages.append({"role": "assistant", "content": text})
             return text
+        drawn = _drawn_answer(done)
+        if drawn:
+            # The chat model was unloaded to make room for the drawing; one
+            # more hop reloads it and re-reads the whole conversation just to
+            # say "here it is" — measured 29 s after a 33 s drawing. Code
+            # says it, and the reload happens in the background instead.
+            messages.append({"role": "assistant", "content": drawn})
+            if on_delta:
+                on_delta(drawn)
+            ANSWERED_BY_CODE[:] = [True]
+            rewarm(messages)
+            return drawn
     # Unreachable by construction: the final hop above always returns.
     return _final_answer(messages, on_delta, should_stop)
+
+
+# Set when the turn's answer was written by code (nothing to fact-check).
+ANSWERED_BY_CODE = []
+
+
+def _drawn_answer(done):
+    """The answer for a hop that only drew pictures, all successfully."""
+    if not done or any(n != "generate_image" or not isinstance(r, dict) or not r.get("path")
+                       for n, r in done):
+        return None
+    lines = []
+    for _, r in done:
+        how = {"lines": " — same outline, redrawn", "character": " — same character, new scene",
+               "look": " — touched up"}.get(r.get("keep"), "") if r.get("reference") else ""
+        lines.append(f"Here it is{how} ({r.get('seconds')} s): `{r['path']}` — ctrl+o opens it.")
+    return "\n".join(lines)
+
+
+def rewarm(messages):
+    """Load the chat model again and read this conversation into its cache,
+    in the background, so his next message doesn't pay for it. Fire and
+    forget: a failure only means the next message is slower."""
+    import copy
+    import threading
+    snapshot = copy.deepcopy(messages)
+
+    def go():
+        try:
+            requests.post(OLLAMA_CHAT, timeout=180, json={
+                "model": MODEL, "messages": _attach.ollama_messages(snapshot),
+                "tools": TOOLS, "think": False, "stream": False, "keep_alive": KEEP_ALIVE,
+                "options": {"temperature": 0.3, "num_ctx": NUM_CTX, "num_predict": 1}})
+        except Exception:
+            pass
+    threading.Thread(target=go, daemon=True).start()
 
 
 FINAL_NUDGE = ("[note from Johan's runtime, not Riadh] No more tools are "
