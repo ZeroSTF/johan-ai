@@ -180,6 +180,14 @@ def unit():
             again = js.inject(msgs, msgs[-1]["content"], embed=fake_embed)
             check("the same skill is not injected twice in one conversation",
                   again is None and len(msgs) == 4)
+            prev = "find MyStuff.cfg in my tf2 folder"
+            msgs = [{"role": "user", "content": prev}, {"role": "assistant", "content": "found"},
+                    {"role": "user", "content": "remove unnecessary stuff from it"}]
+            check("a follow-up pointing back is matched WITH his previous message",
+                  js._match_text(msgs, msgs[-1]["content"]) == prev + "\nremove unnecessary stuff from it")
+            check("a message with its own topic is matched alone",
+                  js._match_text(msgs[:2] + [{"role": "user", "content": "free up disk space"}],
+                                 "free up disk space") == "free up disk space")
         finally:
             js.THRESHOLD = real_t
     finally:

@@ -713,8 +713,17 @@ RESEARCH_HINT = re.compile(r"\b(research|dig into|deep[- ]dive|look into|in dept
 
 # "research X and draw/write/set up Y": look things up, then do the thing.
 MAKE_NOTE = ("He wants something made or done, and looking things up is only a step. "
-             "First look up what you need (web_search / wikipedia / fetch_page), then do "
-             "what he asked in this same turn — don't stop at a summary.")
+             "First look up what you need with a few quick web_search / fetch_page calls "
+             "(not deep_research — it takes minutes), then do what he asked in this same "
+             "turn — don't stop at a summary. If he asked for ideas or a plan, write them "
+             "yourself, concrete and specific to him (his skills are in his records: "
+             "search_bullets); what you looked up only informs them. Don't end by asking "
+             "for more information you could look up.")
+
+
+FAILED_NOTE = ("Deep research failed this time ({err}). Say so in one short line, then "
+               "answer as well as you can from what you know and his records, and say "
+               "which parts are your own knowledge rather than looked up.")
 
 
 def _maybe_research(q, on_tool, on_delta, should_stop):
@@ -745,7 +754,12 @@ def _maybe_research(q, on_tool, on_delta, should_stop):
     res = _research.deep_research(q, on_progress=progress, should_stop=should_stop)
     notify_tool(on_tool, "deep_research", {"question": q}, res)
     if res.get("error"):
-        return f"Research came back empty: {res['error']}"
+        if "stopped" in res["error"]:
+            return f"Research stopped: {res['error']}"
+        # Failed research must not end the turn with an error meant for the
+        # model: asked for business ideas, he got "Say so rather than
+        # answering from memory" and nothing else. The loop answers instead.
+        return {"role": "system", "content": FAILED_NOTE.format(err=res["error"])}
     src = "\n".join(f"[{s['n']}] {s['title']} — {s['url']}" for s in res.get("sources", []))
     return (f"{res['report']}\n\n**Sources**\n{src}\n\n"
             f"_{res['pages_read']} pages read in {res['seconds']}s · saved to {res['path']}_")
@@ -787,8 +801,8 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
     q = _last_user_message(messages)
     report = _maybe_research(q, on_tool, on_delta, should_stop)
     note = None
-    if report is MAKE_NOTE:
-        note = {"role": "system", "content": MAKE_NOTE}
+    if report is MAKE_NOTE or isinstance(report, dict):
+        note = report if isinstance(report, dict) else {"role": "system", "content": MAKE_NOTE}
         messages.append(note)
     elif report is not None:
         messages.append({"role": "assistant", "content": report})
@@ -812,8 +826,11 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
             execute=lambda c: execute_tool(c, seen, 0, q, should_stop))
         if asked:
             return _plan.render_ask(asked)
+    # Not on "make" turns (ideas, a plan, a text): the check demands every
+    # line come from a tool result, so it cut his business ideas down to the
+    # ones a blog listed and opened with "Here is the corrected breakdown".
     if VERIFY_ANSWERS and answer and not answer.startswith("(interrupted") \
-            and not ANSWERED_BY_CODE:
+            and not ANSWERED_BY_CODE and report is not MAKE_NOTE:
         answer = johan_steps._verify_and_fix(messages, start, answer, should_stop)
     # A correction of how Johan behaves becomes a saved rule. Costs nothing
     # unless the word-boundary pre-filter fires; the UIs show LAST_LEARNED.

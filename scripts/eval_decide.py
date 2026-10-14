@@ -157,6 +157,10 @@ GOAL_CASES = [
     ("research this properly: what are the keyboard controls in Lisa the Painful?", "report"),
     ("can you dig into which EOR companies can hire in Tunisia", "report"),
     ("do a deep dive on qwen3.5 vs gemma 4 for tool calling", "report"),
+    # ideas are made FOR him: as a "report" they came back as 3 sentences + quotes
+    ("the job market here is dead, i want to build an app or platform that makes money "
+     "through premium or ads. help me by proposing ideas, think deeply and do research", "make"),
+    ("research what's selling on etsy and suggest some digital products i could make", "make"),
 ]
 
 # Corrections of Johan's BEHAVIOUR (saved as rules) vs everything else that
@@ -198,7 +202,8 @@ HOLDOUT["research_goal"] = [(GOAL_Q, GOAL_OPTS, f"Message: {m}", w) for m, w in 
     ("dig into what the name johan means and make me a logo from it", "make"),
     ("research how people tune pipewire latency, then change my settings", "make"),
     ("research properly whether tunisian freelancers can use wise", "report"),
-    ("deep dive into why qwen models think so long", "report")]]
+    ("deep dive into why qwen models think so long", "report"),
+    ("look into the indie game market properly and give me a few game ideas i could ship solo", "make")]]
 HOLDOUT["feedback"] = [(FEEDBACK_Q, FEEDBACK_OPTS, _fb_ctx(p, m), w) for p, m, w in [
     ("Great question! Let me explain in detail...", "quit writing essays, keep it to two lines", "yes"),
     ("I checked with run_command: you have 2,260 packages.",

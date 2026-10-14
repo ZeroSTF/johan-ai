@@ -1181,8 +1181,11 @@ def run_command(command, timeout=20):
     out = {"command": " ; ".join(ran), "exit_code": rc,
            "lines": len(lines), "pages": pages, "page": page, "output": head}
     if pages > 1:
-        out["more"] = (f"showing page 1 of {pages} ({len(lines)} lines). "
-                       f"Call run_command(page=2) for the next {PAGE_LINES}.")
+        # "find me the content of MyStuff.cfg" got page 1 of 4 and "want me to
+        # continue?" — the rest is one call away, so say to make it.
+        out["more"] = (f"showing page 1 of {pages} ({len(lines)} lines). If he asked to "
+                       f"see or change all of it, call run_command(page=2) and on now — "
+                       f"don't ask him whether to continue.")
     return out
 
 

@@ -69,6 +69,9 @@ FIX_PROMPT = (
     "[Johan, internal] Check that answer against the tool results above. "
     "Rewrite it so it states only facts and numbers that appear in those "
     "results, exactly as they appear, and says plainly what was not found. "
+    "Your own ideas, advice and suggestions may stay — only facts and numbers "
+    "must come from the results. "
+    "He never saw the first version: don't mention it, corrections or mistakes. "
     "Keep my language and your normal tone. "
     "Reply with the corrected answer only.")
 

@@ -153,10 +153,27 @@ def match(message, threshold=None, embed=None):
     return None
 
 
+# "remove unnecessary stuff from it", right after reading his TF2 config,
+# matched free-disk-space (0.72) on its own words and Johan went off running
+# du on his home folder. A message that points back has no topic of its own:
+# it is matched together with his previous message (-> game-config, 0.65).
+BACK_REF = re.compile(r"\b(it|its|this|that|these|those|them|there)\b", re.I)
+
+
+def _match_text(messages, message):
+    if not BACK_REF.search(message or ""):
+        return message
+    users = [m.get("content") for m in messages
+             if m.get("role") == "user" and isinstance(m.get("content"), str)]
+    if users and users[-1] == message:
+        users = users[:-1]
+    return f"{users[-1]}\n{message}" if users else message
+
+
 def inject(messages, message, embed=None):
     """Insert the matching skill just before his message (once per
     conversation per skill). Returns the skill's name, or None."""
-    s = match(message, embed=embed)
+    s = match(_match_text(messages, message), embed=embed)
     if not s:
         return None
     tag = f"{MARK} — {s['name']}"

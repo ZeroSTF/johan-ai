@@ -124,7 +124,8 @@ NULLS["research_intent"] = "Message: N/A"
 GOAL_Q = "What does Riadh want Johan to hand back for this message?"
 GOAL_OPTS = {"report": "an answer or report about the topic: facts, a comparison, an explanation",
              "make": "something made or done with what is learned: a picture, a drawing, code, a "
-                     "file, a change on his machine, or a text for someone"}
+                     "file, a change on his machine, a text for someone, or ideas and a plan "
+                     "worked out for him"}
 NULLS["research_goal"] = "Message: N/A"
 
 MULTI_Q = "How many separate lookups does answering this message take?"

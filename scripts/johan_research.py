@@ -361,9 +361,25 @@ def research_question(text):
     return q or str(text or "").strip()
 
 
+# A long message (his whole situation + the ask) is not a search query: sent
+# as one, the only engine still answering (DuckDuckGo) crashed and research
+# returned nothing. Above this length the model boils it down first.
+LONG_QUESTION = 160
+SHORTEN_PROMPT = ("Rewrite this message as ONE short web research question, under 15 words, "
+                  "keeping what he wants found out. Only the question, nothing else.\n\n"
+                  "Message: {q}")
+
+
+def short_question(q, should_stop=None):
+    if len(q) <= LONG_QUESTION:
+        return q
+    line = next(iter(_lines(_generate(SHORTEN_PROMPT.format(q=q), should_stop), 1)), "")
+    return line if 3 <= len(line) <= LONG_QUESTION else q[:LONG_QUESTION]
+
+
 def deep_research(question, minutes=3, on_progress=None, should_stop=None):
     """Research `question` for a few minutes and return a cited report."""
-    question = research_question(question)
+    question = short_question(research_question(question), should_stop)
     started = time.monotonic()
     try:
         minutes = max(1, min(float(minutes or 3), 5))
@@ -411,7 +427,7 @@ def deep_research(question, minutes=3, on_progress=None, should_stop=None):
     if not notes:
         return {"error": "research found nothing readable — search may be "
                          "degraded (upstream engines refusing) or the pages "
-                         "were gated. Say so rather than answering from memory.",
+                         "were gated.",
                 "seconds": round(time.monotonic() - started)}
 
     progress("writing the report")
