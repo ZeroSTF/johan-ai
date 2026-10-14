@@ -103,10 +103,19 @@ def _compact(result):
         return str(result)
 
 
+def _shown_by_code(content):
+    """find_images results: the pictures, titles and sources are put on his
+    screen by code, so the answer is only a caption list. Checking it against
+    them measured 3/3 false alarms ("History, Height, & Facts" in a page title
+    read as a claim) and each rewrite made a word-for-word answer worse."""
+    return content.startswith('{"count": ') and '"pictures": [' in content[:40]
+
+
 def _evidence(messages, start):
     """Tool results added to the conversation since `start`."""
     parts = [m["content"][:PER_RESULT_CHARS] for m in messages[start:]
-             if m.get("role") == "tool" and m.get("content")]
+             if m.get("role") == "tool" and m.get("content")
+             and not _shown_by_code(m["content"])]
     return "\n".join(parts)[:EVIDENCE_CHARS]
 
 

@@ -226,6 +226,7 @@ VERBS = {
     "tasks": "updating tasks", "propose_edit": "drafting an edit",
     "run_python": "running Python", "deep_research": "researching",
     "autofill_application": "filling an application", "generate_image": "drawing",
+    "find_images": "finding pictures",
     "search_conversations": "searching old chats", "scratchpad": "taking notes",
     "ask": "asking you",
 }
@@ -588,6 +589,116 @@ class ImageCard(Vertical):
             for img in self.query(TermImage):
                 img.remove()
         self.query_one(".imagecap", Static).update("[$text-muted](image deleted)[/]")
+
+
+SAVED_PICTURES = Path.home() / "Pictures/johan"     # `s` on a found picture
+
+
+class WebPicsCard(Vertical, can_focus=True):
+    """Pictures find_images brought back, side by side with their source
+    sites. Click one (or ←/→, 1-8) to pick it; then o / w / s / r."""
+
+    BINDINGS = [
+        Binding("left", "move(-1)", "prev", show=False),
+        Binding("right", "move(1)", "next", show=False),
+        Binding("o", "open_pic", "open picture"),
+        Binding("w", "open_source", "source page"),
+        Binding("s", "save_pic", "save to ~/Pictures/johan"),
+        Binding("r", "use_as_reference", "redraw it"),
+    ] + [Binding(str(n), f"pick({n - 1})", show=False) for n in range(1, 9)]
+
+    def __init__(self, result):
+        super().__init__(classes="webpics")
+        self.pics = [p for p in result.get("pictures", []) if p.get("path")]
+        self.sel = 0
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(classes="webpics-row"):
+            for n, p in enumerate(self.pics):
+                with Vertical(classes="webpic" + (" -sel" if n == 0 else "")):
+                    img = _picture(p["path"])
+                    if img is not None:
+                        img.styles.height = 12
+                        img.styles.width = "auto"
+                        yield img
+                    yield Static(mk("[$text-muted]$n · $site$u[/]", n=str(n + 1),
+                                    site=str(p.get("site") or "?")[:28],
+                                    u=" · unsure" if p.get("unsure") else ""),
+                                 classes="webpic-cap")
+        yield Static(mk("[$text-disabled]click a picture · o open · w source page · "
+                        "s save · r redraw it[/]"), classes="imagecap")
+
+    def _cells(self):
+        return list(self.query(".webpic"))
+
+    def _select(self, n):
+        cells = self._cells()
+        if not cells:
+            return
+        self.sel = n % len(cells)
+        for i, c in enumerate(cells):
+            c.set_class(i == self.sel, "-sel")
+
+    def on_click(self, event):
+        cells = self._cells()
+        node = event.widget
+        while node is not None and node is not self:
+            if node in cells:
+                self._select(cells.index(node))
+                break
+            node = node.parent
+        self.focus()
+
+    def action_move(self, step):
+        self._select(self.sel + step)
+
+    def action_pick(self, n):
+        if n < len(self.pics):
+            self._select(n)
+
+    def _pic(self):
+        return self.pics[self.sel] if self.pics else None
+
+    def action_open_pic(self):
+        p = self._pic()
+        if p and not open_target(p["path"]):
+            self.app._toast("couldn't open it", error=True)
+
+    def action_open_source(self):
+        p = self._pic()
+        if p and p.get("source") and not open_target(p["source"]):
+            self.app._toast("couldn't open the page", error=True)
+
+    def action_save_pic(self):
+        p = self._pic()
+        if not p:
+            return
+        dest = SAVED_PICTURES
+        try:
+            dest.mkdir(parents=True, exist_ok=True)
+            out = dest / Path(p["path"]).name
+            shutil.copy2(p["path"], out)
+            self.app._toast(str(out), "saved")
+        except OSError as e:
+            self.app._toast(f"couldn't save: {e}", error=True)
+
+    def action_use_as_reference(self):
+        p = self._pic()
+        if not p:
+            return
+        box = self.app.query_one("#prompt")
+        box.value = f"/draw {_quote_path(p['path'])} "
+        box.cursor_position = len(box.value)
+        box.focus()
+
+    def file_gone(self):
+        """Same guard as ImageCard: a picture whose file vanished must not be
+        redrawn from its path (that crashed the app)."""
+        if TermImage is not None:
+            for n, p in enumerate(self.pics):
+                if not Path(p["path"]).exists():
+                    for img in self._cells()[n].query(TermImage):
+                        img.remove()
 
 
 class Welcome(Vertical):
@@ -1208,6 +1319,12 @@ class JohanApp(App):
     .note { margin: 1 0 0 1; height: auto; }
     .imagecard { height: auto; margin: 1 0 0 3; padding: 0; }
     .imagecap { margin: 0; }
+    .webpics { height: auto; margin: 1 0 0 3; padding: 0; }
+    .webpics:focus { background-tint: transparent; }
+    .webpics-row { height: auto; }
+    .webpic { width: auto; height: auto; margin: 0 1 0 0; border: round $panel; }
+    .webpics:focus .webpic.-sel { border: round $accent; }
+    .webpic-cap { width: auto; height: 1; text-wrap: nowrap; }
 
     /* ---- the home card */
     Welcome { height: auto; margin: 1 0 0 0; padding: 1 2; border: round $panel; }
@@ -2002,6 +2119,8 @@ class JohanApp(App):
             self.call_from_thread(setattr, self, "busy_label", tool_word(name))
             if name == "generate_image" and isinstance(result, dict) and result.get("path"):
                 self.call_from_thread(self._show_image, result)
+            if name == "find_images" and isinstance(result, dict) and result.get("pictures"):
+                self.call_from_thread(self._show_webpics, result)
             if name == "propose_action" and isinstance(result, dict) and result.get("auto_allowed"):
                 self.call_from_thread(self._toast, result.get("result", ""),
                                       f"change a{result.get('action_id')} ran (always allowed)",
@@ -2045,6 +2164,12 @@ class JohanApp(App):
         if result.get("path") not in self.openables:
             self.openables.append(result["path"])
         self.query_one(ImagesPane).load()
+
+    def _show_webpics(self, result):
+        self._chat().add(WebPicsCard(result))
+        for p in result["pictures"]:
+            if p.get("path") and p["path"] not in self.openables:
+                self.openables.append(p["path"])
 
     def _finish(self, focus=None):
         jx.end_turn()

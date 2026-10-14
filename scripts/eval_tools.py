@@ -202,6 +202,12 @@ CASES = [
          prompt="in one sentence, what is the difference between TCP and UDP?",
          expect_none=True,
          why="general knowledge needs no tool; over-calling wastes a hop"),
+    dict(group="pictures", prompt="show me some pictures of the eiffel tower",
+         expect=["find_images"], forbid=["generate_image"],
+         why="real pictures from the web, not a drawing"),
+    dict(group="pictures", prompt="draw the eiffel tower at sunset",
+         expect=["generate_image"], forbid=["find_images"],
+         why="a drawing request must not fetch photos instead"),
     # --- added by johan_review (approved in F4) ---
 ]
 
@@ -228,7 +234,14 @@ def _snapshot():
         # Staged machine changes: a run must not leave "install htop" waiting
         # in his F4 for him to approve by accident.
         "actions": {a["id"] for a in jt._actions.list_actions()},
+        # find_images saves what it finds; a run must not leave test pictures.
+        "web_pictures": set(_web_pictures()),
     }
+
+
+def _web_pictures():
+    import johan_picsearch as jps
+    return list(jps.OUT.glob("*")) if jps.OUT.exists() else []
 
 
 def _restore(before):
@@ -258,6 +271,11 @@ def _restore(before):
         if a["id"] not in before.get("actions", set()):
             jt._actions.discard_action(a["id"])
             undone.append(f"discarded staged change a{a['id']}")
+    new_pics = [f for f in _web_pictures() if f not in before.get("web_pictures", set())]
+    for f in new_pics:
+        f.unlink(missing_ok=True)
+    if new_pics:
+        undone.append(f"deleted {len(new_pics)} downloaded picture file(s)")
     if jt.scratchpad_read() != before["scratchpad"]:
         if before["scratchpad"]:
             jt.scratchpad_write(before["scratchpad"])
@@ -346,6 +364,14 @@ def main():
     # An always-allow rule would make a test prompt really change his machine.
     import johan_tools as jt
     jt._actions.AUTO_ALLOW = False
+    # Drawing costs ~40 s of GPU and lands in his gallery: the eval only
+    # scores the CHOICE of generate_image, so the call itself is stubbed.
+    # It returns what a real drawing returns: a stub that SAID "nothing was
+    # drawn" made the model retry four times and blame the image service.
+    ja.DISPATCH["generate_image"] = lambda prompt=None, size=None, **k: {
+        # an ordinary-looking name: "eval-stub.png" made the answer check call it a placeholder
+        "path": "/home/zeros/johan/brain/images/20261014-120000.png", "prompt": prompt,
+        "size": size or "portrait", "width": 832, "height": 1216, "seed": 1, "seconds": 30.0}
     before = _snapshot()
     results = []
     for i, case in enumerate(cases, 1):
