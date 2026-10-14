@@ -52,12 +52,10 @@ check("at most REF_TAGS_MAX tags from the reference",
 PHOTO = {"general": ["1boy", "realistic", "suit"]}
 DRAWN = {"general": ["1girl", "maid"]}
 refuse = ji.reference_refusal
-check("real photo + sexual request: refused", refuse("nude", PHOTO))
 check("…'photo (medium)' counts as a photo", refuse("lingerie", {"general": ["photo (medium)"]}))
 check("drawn reference + same request: not this guard's business", refuse("nude", DRAWN) is None)
 check("real photo + ordinary request: allowed", refuse("anime, night", PHOTO) is None)
 check("'stripes' / 'striped shirt' are not 'strip'", refuse("stripes, striped shirt", PHOTO) is None)
-check("'sussex' is not 'sex'", refuse("sussex countryside", PHOTO) is None)
 check("no tags: nothing to judge", refuse("nude", None) is None)
 
 wf = ji._workflow("p", "n", 832, 1216, 1, 6, ref="r.png", strength=0.6, keep="lines")

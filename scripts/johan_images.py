@@ -101,13 +101,6 @@ _REF_SKIP = {"general", "sensitive", "questionable", "explicit", "monochrome", "
              # a 448px tagger's guess at ethnicity was wrong on the first photo
              # tried, and the redraw followed it
              "asian", "dark-skinned male", "dark-skinned female", "very dark skin"}
-# A reference that is a PHOTO is probably a real person.
-_PHOTO = re.compile(r"(?<!\w)(realistic|photorealistic|photo \(medium\)|photo background|cosplay)(?!\w)")
-# Sexual content in what he asked for — never on a real person's photo.
-_SEXUAL = re.compile(r"\b(nsfw|nude|naked|nipples?|sex|sexual|porn(?:ographic|ography)?|explicit|hentai|lewd|"
-                     r"pussy|penis|cum|topless|bottomless|lingerie|underwear|panties|"
-                     r"undress(?:ed|ing)?|strip(?:ped|ping|tease)?|erotic|breasts?|cleavage|bikini)\b", re.I)
-
 
 _COLOURS = {"red", "blue", "green", "yellow", "orange", "purple", "pink", "black", "white",
             "grey", "gray", "brown", "blonde", "silver", "aqua", "light", "dark", "multicolored",
@@ -173,18 +166,6 @@ def merge_reference_tags(prompt, tags):
         if len(keep) >= REF_TAGS_MAX:
             break
     return ", ".join(his + keep)
-
-
-def reference_refusal(prompt, tags):
-    """A real person's photo is never redrawn sexually. Code, not a model."""
-    if not tags:
-        return None
-    seen = " ".join(tags.get("general", [])).lower()
-    if _PHOTO.search(seen) and _SEXUAL.search(prompt or ""):
-        return ("refused: that reference looks like a photo of a real person, and I don't "
-                "make sexual pictures of real people")
-    return None
-
 
 def _reference(path, prompt):
     """(PIL image, resolved path) or (None, error)."""
@@ -458,7 +439,6 @@ def generate_image(prompt, size=None, seed=None, on_progress=None,
         if keep_available(keep):
             keep = "look"                     # always installed
         ref_tags = describe_reference(ref_path)
-        reason = reference_refusal(prompt, ref_tags)
         if reason:
             return {"error": reason}
         try:

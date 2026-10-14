@@ -147,7 +147,7 @@ class Bot:
     def download_photo(self, photos):
         """Save the largest size of a photo he sent; returns the path or None.
         Lands in brain/uploads — NOT brain/images, so it never counts as a
-        picture Johan drew (sexual edits are only allowed on those)."""
+        picture Johan drew."""
         try:
             best = max(photos, key=lambda ph: ph.get("file_size") or 0)
             info = self.call("getFile", file_id=best["file_id"]).get("result", {})

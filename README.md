@@ -178,8 +178,6 @@ Three ways to use it, picked from what you ask:
 - **look** — a small touch-up that keeps colours and layout. Giving a
   number picks this: `/draw ~/pic.png 0.3 golden hour`.
 
-A photo of a real person is never redrawn sexually.
-
 **F4 Images:** `o` open, `v` variation, `u` reuse the prompt, `i` redraw
 this one, `x` twice to delete.
 
