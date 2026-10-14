@@ -105,6 +105,9 @@ async def main():
             check("image caption", lambda: chat.add(tui.ImageCard(
                 {"path": "/nonexistent.png", "prompt": ALL, "width": 1, "height": 2,
                  "seed": 3, "seconds": 4})))
+            check("found pictures card (web titles/sites)", lambda: chat.add(tui.WebPicsCard(
+                {"pictures": [{"path": f"/nonexistent{i}.jpg", "site": s, "title": s,
+                               "source": s, "unsure": i % 2} for i, s in enumerate(NASTY[:8])]})))
             check("toast", lambda: app._toast(ALL, ALL, True))
             check("status line with a junk tool name", lambda: (
                 setattr(app, "busy_label", ALL), app._start_busy(ALL), app._tick()

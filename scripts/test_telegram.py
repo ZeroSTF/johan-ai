@@ -8,6 +8,7 @@ chat message flows through today's engine. Needs Ollama for the chat case.
     python test_telegram.py
 """
 import os
+import json
 import sys
 from pathlib import Path
 
@@ -211,6 +212,53 @@ def approval_checks():
     return results
 
 
+def album_checks():
+    """find_images from the phone: the pictures arrive as ONE album whose
+    caption carries every source link; if Telegram refuses the album, each
+    picture goes on its own, still with its source."""
+    import shutil
+    import tempfile
+    from PIL import Image
+    tmp = Path(tempfile.mkdtemp())
+    pics = []
+    for n in range(2):
+        p = tmp / f"{n}.jpg"
+        Image.new("RGB", (300, 300), (n * 100, 50, 50)).save(p)
+        pics.append({"path": str(p), "site": f"site{n}.com", "source": f"https://site{n}.com/page"})
+    results = {}
+    real = (ja.run_turn, tg.ollama_up, ja.prime_with_memories)
+
+    def fake_turn(messages, on_tool=None, **kw):
+        on_tool("find_images", {"query": "red panda"}, {"count": 2, "pictures": pics})
+        return "Here are two red pandas (site0.com, site1.com)."
+    ja.run_turn, tg.ollama_up = fake_turn, (lambda: True)
+    ja.prime_with_memories = lambda s, *a, **k: s
+    try:
+        bot = FakeBot({ME})
+        tg.handle_update(bot, update(ME, "show me red pandas"))
+        albums = [p for m, p in bot.calls if m == "sendMediaGroup"]
+        media = json.loads(albums[0]["media"]) if albums else []
+        results["pictures go as one album"] = len(albums) == 1 and len(media) == 2
+        results["…captioned with every source link"] = bool(media) and all(
+            f"https://site{n}.com/page" in media[0].get("caption", "") for n in range(2))
+
+        class RefusesAlbums(FakeBot):
+            def call(self, method, http_timeout=40, files=None, **params):
+                if method == "sendMediaGroup":
+                    self.calls.append((method, params))
+                    return {"ok": False}
+                return super().call(method, http_timeout, files, **params)
+        bot = RefusesAlbums({ME})
+        tg.handle_update(bot, update(ME, "show me red pandas"))
+        singles = [p for m, p in bot.calls if m == "sendPhoto"]
+        results["album refused: one photo each, each with its source"] = len(singles) == 2 and all(
+            "site.com" not in s["caption"] and "https://" in s["caption"] for s in singles)
+    finally:
+        ja.run_turn, tg.ollama_up, ja.prime_with_memories = real
+        shutil.rmtree(tmp, ignore_errors=True)
+    return results
+
+
 def aq_latest():
     return tg.aq.latest_queue
 
@@ -385,6 +433,7 @@ def main():
     results.update(file_command_checks())
     results.update(button_checks())
     results.update(approval_checks())
+    results.update(album_checks())
 
     saved = {k: os.environ.pop(k, None) for k in ("DISPLAY", "WAYLAND_DISPLAY")}
     try:

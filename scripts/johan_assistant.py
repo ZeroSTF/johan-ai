@@ -140,6 +140,7 @@ Rules:
   Only report something done if the result says it ran.
 - deep_research only when he explicitly asks for research; give its report
   and sources as returned.
+- Pictures/photos of something real ("show me X") → find_images; drawing → generate_image.
 - Keep answers short and concrete.
 """
 
@@ -440,8 +441,10 @@ import johan_images as _images  # noqa: E402
 import johan_reader as _reader  # noqa: E402
 import johan_learn as _learn  # noqa: E402
 import johan_skills as _skills  # noqa: E402
-TOOLS = TOOLS + [_research.TOOL, _autofill.TOOL, _images.TOOL]
+import johan_picsearch as _picsearch  # noqa: E402
+TOOLS = TOOLS + [_research.TOOL, _autofill.TOOL, _images.TOOL, _picsearch.TOOL]
 DISPATCH["generate_image"] = _images.generate_image
+DISPATCH["find_images"] = _picsearch.find_images
 DISPATCH["deep_research"] = _research.deep_research
 DISPATCH["autofill_application"] = _autofill.autofill_application
 import johan_plan as _plan  # noqa: E402  (ask-with-options; ends the turn)
@@ -606,7 +609,7 @@ def _is_trivial(message):
 # Tools that run for minutes take the turn's stop signal, so esc works while
 # they run. The model chose deep_research for "write an essay about the
 # Mediterranean", and esc then did nothing for the whole research budget.
-STOPPABLE = {"deep_research"}
+STOPPABLE = {"deep_research", "find_images"}
 
 
 def execute_tool(call, seen, hop, user_message, should_stop=None):

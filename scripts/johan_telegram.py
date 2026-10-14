@@ -172,6 +172,40 @@ class Bot:
                              chat_id=chat, caption=caption[:1000])
         return bool(body.get("ok"))
 
+    def send_album(self, chat, pics):
+        """Pictures find_images brought back: one album, the sources as the
+        caption (links must survive — they're the citation). Falls back to
+        one photo each if Telegram refuses the album."""
+        pics = [p for p in pics if Path(p.get("path", "")).exists()][:10]
+        if not pics:
+            return False
+        caption = "\n".join(f"{n}. {p.get('site', '?')} — {p.get('source', '')}"
+                            for n, p in enumerate(pics, 1))[:1000]
+        if len(pics) > 1:
+            handles = [Path(p["path"]).open("rb") for p in pics]
+            try:
+                media = [{"type": "photo", "media": f"attach://p{n}",
+                          **({"caption": caption} if n == 0 else {})}
+                         for n in range(len(pics))]
+                body = self.call("sendMediaGroup", http_timeout=120,
+                                 files={f"p{n}": (Path(p["path"]).name, fh, "image/jpeg")
+                                        for n, (p, fh) in enumerate(zip(pics, handles))},
+                                 chat_id=chat, media=json.dumps(media))
+            finally:
+                for fh in handles:
+                    fh.close()
+            if body.get("ok"):
+                return True
+        ok = False
+        for n, p in enumerate(pics, 1):
+            with Path(p["path"]).open("rb") as fh:
+                body = self.call("sendPhoto", http_timeout=120,
+                                 files={"photo": (Path(p["path"]).name, fh, "image/jpeg")},
+                                 chat_id=chat,
+                                 caption=f"{n}. {p.get('site', '?')} — {p.get('source', '')}"[:1000])
+            ok = ok or bool(body.get("ok"))
+        return ok
+
     # ---------------------------------------------------------- state
 
     def _load_offset(self):
@@ -712,6 +746,10 @@ def run_chat_turn(bot, chat, progress=None):
         if name == "generate_image" and isinstance(result, dict) and result.get("path"):
             bot.send_photo(chat, result["path"],
                            caption=f"{result.get('prompt', '')[:200]} · seed {result.get('seed')}")
+        if name == "find_images" and isinstance(result, dict) and result.get("pictures"):
+            import johan_picsearch as jps     # full-size beats thumbnails on a phone
+            jps.wait_full([p["path"] for p in result["pictures"]], timeout=15)
+            bot.send_album(chat, result["pictures"])
         # An always-allowed change RAN on the PC — say so in code, not only
         # in whatever the model writes about it.
         if name == "propose_action" and isinstance(result, dict) and result.get("auto_allowed"):

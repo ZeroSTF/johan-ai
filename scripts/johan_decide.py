@@ -178,7 +178,7 @@ def _letter_of(token):
     return t if len(t) == 1 and t in LETTERS else None
 
 
-def _score_once(question, items, context, system):
+def _score_once(question, items, context, system, images=None):
     cfg = _cfg()
     lines = [f"{LETTERS[i]}) {desc}" for i, (_, desc) in enumerate(items)]
     prompt = ((context.strip() + "\n\n") if context else "") + \
@@ -193,7 +193,8 @@ def _score_once(question, items, context, system):
         "logprobs": True, "top_logprobs": len(LETTERS),
         "options": {"num_predict": 1, "temperature": 0, "num_ctx": cfg.NUM_CTX},
         "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": prompt}],
+                     {"role": "user", "content": prompt,
+                      **({"images": list(images)} if images else {})}],
     }, timeout=120)
     top = (body.get("logprobs") or [{}])[0].get("top_logprobs", [])
     mass = [0.0] * len(items)
@@ -204,22 +205,34 @@ def _score_once(question, items, context, system):
     return mass, top
 
 
+def _grey_b64():
+    """A content-free picture: the null input for calibrating image checks."""
+    import base64
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), (128, 128, 128)).save(buf, "PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 def _prior_path():
     return _cfg().ROOT / "brain/decide-priors.json"
 
 
-def _prior(question, items, system, null_context):
+def _prior(question, items, system, null_context, null_images=None):
     """The model's lean on this question with no real input. Cached."""
     import hashlib
     key = hashlib.sha1(json.dumps([question, items, system, null_context,
-                                   _cfg().MODEL]).encode()).hexdigest()[:16]
+                                   _cfg().MODEL] + (["img"] if null_images else [])
+                                  ).encode()).hexdigest()[:16]
     if not _PRIORS:
         try:
             _PRIORS.update(json.loads(_prior_path().read_text()))
         except Exception:
             pass
     if key not in _PRIORS:
-        mass, _ = _score_once(question, items, null_context, system)
+        mass, _ = _score_once(question, items, null_context, system,
+                              *([null_images] if null_images else []))
         s = sum(mass)
         _PRIORS[key] = [m / s for m in mass] if s > 0 else [1 / len(items)] * len(items)
         try:
@@ -231,8 +244,12 @@ def _prior(question, items, system, null_context):
 
 def decide(question, options, context="", *, kind="general", debias=False,
            calibrate=True, null_context=NULL_CONTEXT,
-           threshold=DEFAULT_THRESHOLD, system=DECIDE_SYSTEM, log=True):
+           threshold=DEFAULT_THRESHOLD, system=DECIDE_SYSTEM, log=True,
+           images=None):
     """Pick one of `options`. Returns a Decision.
+
+    `images` (base64 strings) are attached to the question — the model can
+    see; calibration then uses a plain grey picture as the content-free input.
 
     `debias=True` scores the options in original AND reversed order and
     averages. Off by default because it measured WORSE (84% vs 88% on
@@ -249,7 +266,8 @@ def decide(question, options, context="", *, kind="general", debias=False,
     total = [0.0] * len(items)
     coverages, raws = [], []
     for order in orders:
-        mass, raw = _score_once(question, [items[i] for i in order], context, system)
+        mass, raw = _score_once(question, [items[i] for i in order], context, system,
+                                *([images] if images else []))
         raws.append(raw)
         coverages.append(sum(mass))
         for pos, idx in enumerate(order):
@@ -257,7 +275,8 @@ def decide(question, options, context="", *, kind="general", debias=False,
 
     coverage = sum(coverages) / len(coverages)
     if calibrate:
-        prior = _prior(question, items, system, null_context)
+        prior = _prior(question, items, system, null_context,
+                       *([[_grey_b64()]] if images else []))
         total = [x / max(pr, PRIOR_FLOOR) for x, pr in zip(total, prior)]
     s = sum(total)
     probs_list = [x / s for x in total] if s > 0 else [1 / len(items)] * len(items)
