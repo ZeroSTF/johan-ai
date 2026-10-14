@@ -331,6 +331,15 @@ def render_plan(steps):
     return "\n".join(f"{i}. {s['do']}" for i, s in enumerate(steps, 1))
 
 
+def _with_images(messages):
+    """Attached pictures as the chat call sends them (same prefix, same pixels)."""
+    try:
+        import johan_attach
+        return johan_attach.ollama_messages(messages)
+    except Exception:
+        return messages
+
+
 def _plan_call(messages, cfg):
     """ONE model call. Same model, system text, tool schema, num_ctx and
     keep_alive as call_model, so the conversation's cached prefix is reused;
@@ -338,7 +347,7 @@ def _plan_call(messages, cfg):
     names = [t["function"]["name"] for t in cfg.TOOLS]
     import johan_interrupt as ji     # esc stops it mid-wait
     body = ji.ollama_post(cfg.OLLAMA_CHAT, {
-        "model": cfg.MODEL, "messages": messages, "tools": cfg.TOOLS,
+        "model": cfg.MODEL, "messages": _with_images(messages), "tools": cfg.TOOLS,
         "format": plan_schema(names), "think": False,
         "keep_alive": cfg.KEEP_ALIVE,
         "options": {"temperature": 0, "num_ctx": cfg.NUM_CTX, "num_predict": 400}},

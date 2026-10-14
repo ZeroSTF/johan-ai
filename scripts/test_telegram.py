@@ -347,6 +347,46 @@ def button_checks():
     return results
 
 
+def photo_checks():
+    """A photo goes to the model as pixels + its path (vision or redraw);
+    it's downloaded only after the allowlist. Engine stubbed: no model."""
+    import johan_attach as at
+    import johan_plan as jp
+    results, turns, downloads = {}, [], []
+    real = (tg.ollama_up, tg.run_chat_turn, tg.Bot.download_photo, jp.prefilter)
+    tg.ollama_up = lambda: True
+    tg.run_chat_turn = lambda bot, chat, progress=None: turns.append(bot.history(chat)[-1])
+    tg.Bot.download_photo = lambda self, photos: downloads.append(1) or Path("/tmp/his-photo.jpg")
+    jp.prefilter = lambda text: False
+
+    def photo(chat, caption=None):
+        msg = {"chat": {"id": chat}, "photo": [{"file_id": "f", "file_size": 9}],
+               "from": {"username": "x"}}
+        if caption:
+            msg["caption"] = caption
+        return {"message": msg}
+    try:
+        bot = FakeBot({ME})
+        tg.handle_update(bot, photo(STRANGER, "what is this"))
+        results["photo: a stranger's photo is never downloaded"] = not downloads and not turns
+        tg.handle_update(bot, photo(ME, "what's in this picture?"))
+        m = turns[-1] if turns else {}
+        results["photo + caption: sent with the picture (vision) and its path"] = (
+            m.get("image_paths") == ["/tmp/his-photo.jpg"]
+            and at.shown_text(m["content"]) == "what's in this picture?"
+            and "generate_image" in m["content"])
+        n = len(turns)
+        tg.handle_update(bot, photo(ME))
+        results["photo alone: waits for his next message"] = len(turns) == n \
+            and bot.pending_ref.get(ME) is not None
+        tg.handle_update(bot, update(ME, "make it anime"))
+        results["…which then carries the picture"] = turns[-1].get("image_paths") == \
+            ["/tmp/his-photo.jpg"] and ME not in bot.pending_ref
+    finally:
+        tg.ollama_up, tg.run_chat_turn, tg.Bot.download_photo, jp.prefilter = real
+    return results
+
+
 def main():
     results = {}
     engine_calls = []
@@ -382,6 +422,7 @@ def main():
         ja.run_turn = real_run_turn
 
     results.update(draw_checks())
+    results.update(photo_checks())
     results.update(file_command_checks())
     results.update(button_checks())
     results.update(approval_checks())

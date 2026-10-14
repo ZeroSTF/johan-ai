@@ -294,7 +294,30 @@ class PromptArea(TextArea):
         # paste back to the focused prompt and the block landed twice.
         event.stop()
         event.prevent_default()
+        # Files dragged onto the terminal arrive as a paste of their paths:
+        # pictures become attachments instead of text.
+        attach = getattr(self.app, "attach_paths", None)
+        if attach is not None:
+            import johan_attach
+            paths = johan_attach.dropped_paths(event.text)
+            if paths:
+                attach(paths)
+                return
         await super()._on_paste(event)
+
+    def action_paste(self):
+        """ctrl+v: the SYSTEM clipboard (a picture is attached, text pasted).
+        TextArea's own ctrl+v only knew text copied inside this app."""
+        paste = getattr(self.app, "paste_clipboard", None)
+        if paste is None or not paste():
+            super().action_paste()
+
+    def action_delete_left(self):
+        """Backspace on an empty prompt drops the last attached picture."""
+        if not self.text and getattr(self.app, "attachments", None):
+            self.app.remove_attachment(-1)
+            return
+        super().action_delete_left()
 
     def action_cursor_up(self, select=False):
         if self.cursor_location[0] == 0 and not select:

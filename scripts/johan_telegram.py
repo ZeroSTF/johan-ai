@@ -44,6 +44,7 @@ import apply_queue as aq          # noqa: E402
 import johan_actions as jx       # noqa: E402
 import johan_commands as jc       # noqa: E402
 import johan_plan as jp           # noqa: E402
+import johan_attach as _attach    # noqa: E402
 
 API = "https://api.telegram.org/bot{token}/{method}"
 TG_LIMIT = 4000                   # Telegram hard-caps a message at 4096
@@ -525,7 +526,7 @@ COMMANDS = {
 # chat turn
 # --------------------------------------------------------------------------
 
-def handle_chat(bot, chat, text):
+def handle_chat(bot, chat, text, images=None):
     """Free-form message → the same tool loop the desktop UI uses.
 
     The placeholder message is edited as tokens arrive, throttled to ~1.5s
@@ -541,6 +542,8 @@ def handle_chat(bot, chat, text):
     if pend:
         _drop_buttons(bot, chat, pend)
         if pend["kind"] == "plan":
+            if images:                   # keep the picture for his next message
+                bot.pending_ref[chat] = images[0]
             # Text while a plan waits = his changes to it.
             if not propose_plan(bot, chat, changes=text):
                 bot.pending[chat] = pend
@@ -548,7 +551,7 @@ def handle_chat(bot, chat, text):
                          reply_markup=keyboard(pend["id"], pend["labels"]))
                 bot.send(chat, "Couldn't rewrite the plan — the one above still stands.")
             return
-    history.append({"role": "user", "content": text})
+    history.append(_attach.user_message(text, [str(p) for p in images or []]))
     # Plan-first: the regex is free; only what it flags pays for the check.
     if jp.prefilter(text) and jp.needs_plan(text) and propose_plan(bot, chat):
         return
@@ -808,10 +811,9 @@ def handle_update(bot, update):
                            "(e.g. \"redraw it as anime, at night\")")
             return
         bot.pending_ref[chat] = path
+    # The picture goes to the model as pixels AND as a path: it can describe
+    # it, or redraw it with generate_image(reference=path).
     ref = None if text.startswith("/") else bot.pending_ref.pop(chat, None)
-    if ref:
-        text = (f"{text}\n\n[He sent a picture, saved at {ref}. To redraw or change "
-                f"it, call generate_image with reference=\"{ref}\".]")
 
     if text.startswith("/"):
         head, _, arg = text[1:].partition(" ")
@@ -830,7 +832,7 @@ def handle_update(bot, update):
             handle_chat(bot, chat, res["prompt"])
         return
 
-    handle_chat(bot, chat, text)
+    handle_chat(bot, chat, text, images=[ref] if ref else None)
 
 
 # --------------------------------------------------------------------------

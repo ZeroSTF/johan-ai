@@ -131,6 +131,8 @@ Rules:
   find/ls/cat. E.g. asked to check his TF2 config:
   `find /home/zeros -maxdepth 7 -ipath *Team*Fortress*/tf/cfg -type d`.
   Never say a file or folder doesn't exist without checking.
+- Pictures he attaches are visible to you — look at them; to redraw one,
+  generate_image with reference=<its path from the note>.
 - Installed software: `dpkg -l | grep -c ^ii` (apt count), `flatpak list --app`,
   `snap list` — not ~/.local/share/applications.
 - To CHANGE his machine (install/remove software, a setting or shortcut, a
@@ -437,6 +439,7 @@ TOOLS = TOOLS + jt.TOOLS
 import johan_research as _research  # noqa: E402
 import johan_autofill as _autofill  # noqa: E402
 import johan_images as _images  # noqa: E402
+import johan_attach as _attach  # noqa: E402
 import johan_reader as _reader  # noqa: E402
 import johan_learn as _learn  # noqa: E402
 import johan_skills as _skills  # noqa: E402
@@ -489,7 +492,7 @@ def call_model(messages, on_delta=None, no_tools=False, should_stop=None,
     Tool-call chunks carry no visible text, so a hop that decides to call a
     tool simply streams nothing and the UI shows the tool line instead."""
     payload = {
-        "model": MODEL, "messages": messages,
+        "model": MODEL, "messages": _attach.ollama_messages(messages),
         # Omitting "tools" entirely (rather than sending []) is what actually
         # forces prose — an empty list still leaves the tool grammar active.
         # `tools` narrows the schema to a shortlist (the step engine routes
@@ -573,8 +576,8 @@ def log_tool_call(session_id, user_message, hop, tool, args, ok, error,
 
 def _last_user_message(messages):
     for m in reversed(messages):
-        if m.get("role") == "user":
-            return m.get("content", "")
+        if m.get("role") == "user":       # his words, not an attached picture's path note
+            return _attach.shown_text(m.get("content", ""))
     return ""
 
 

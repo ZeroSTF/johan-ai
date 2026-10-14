@@ -88,6 +88,7 @@ import johan_actions as jx        # noqa: E402
 import johan_commands as jc       # noqa: E402
 import apply_queue as aq          # noqa: E402
 import johan_plan as jp           # noqa: E402
+import johan_attach as _attach    # noqa: E402
 import johan_interrupt as ji      # noqa: E402
 from johan_widgets import ApprovalCard, Choices, PlanCard  # noqa: E402
 import johan_approval as jap  # noqa: E402
@@ -160,19 +161,19 @@ def _fixed_muted(theme):
         **(theme.variables or {}),
         "text-muted": bg.blend(fg, 0.55).hex, "text-disabled": bg.blend(fg, 0.36).hex})
 
-PROMPT_HINT = "ask Johan anything  ·  / for commands"
+PROMPT_HINT = "ask Johan anything  ·  / for commands  ·  ctrl+v pastes a picture"
 
 SLASH = ["/draw ", "/draw landscape ", "/draw square ", "/research ", "/review",
          "/refresh",
          "/retry", "/rewind", "/copy", "/new", "/history", "/jobs", "/images", "/changes", "/rules",
-         "/help", "/theme", "/forget ", "/uncensored", "/normal"]
+         "/help", "/theme", "/forget ", "/uncensored", "/normal", "/attach"]
 
 # Every name the app handles itself. A commands/<name>.md file with one of
 # these names is ignored: a built-in always wins.
 BUILTIN_SLASH = {"new", "history", "sessions", "jobs", "images", "edits", "help",
                  "review", "retry", "copy", "theme", "refresh", "draw", "research",
                  "delete", "resume", "rewind", "undo", "rules", "forget", "changes", "edits",
-                 "uncensored", "normal"}
+                 "uncensored", "normal", "attach"}
 
 
 def file_commands():
@@ -403,6 +404,24 @@ class UserMsg(Static):
     def __init__(self, text):
         super().__init__(mk("[b $accent]›[/] $t  [$text-muted]$hm[/]", t=str(text), hm=_hm()),
                          classes="msg-user")
+
+
+class AttachedPics(Horizontal):
+    """The pictures he attached to a message, small, under his bubble."""
+
+    def __init__(self, paths):
+        super().__init__(classes="attached-pics")
+        self.paths = [str(p) for p in paths]
+
+    def compose(self) -> ComposeResult:
+        for p in self.paths:
+            img = _picture(p) if Path(p).is_file() else None
+            if img is not None:
+                img.styles.height = 8
+                img.styles.width = "auto"
+                yield img
+            else:
+                yield Static(mk("[$text-muted]📎 $n[/]", n=_attach.display_name(p)), classes="pic-name")
 
 
 class Note(Static):
@@ -768,6 +787,9 @@ HELP_MD = """\
 - Changes proposed while you weren't here (self-review, your phone, `johan "…"`) show up as the
   same cards when you open Johan. `/changes` lists recent changes; `/changes undo` undoes the last
 - `esc` — stop the current answer
+- Pictures: `ctrl+v` pastes one from the clipboard (a screenshot, "copy image"), `ctrl+f` or
+  `/attach` picks a file, or drag it onto the window. Johan sees it; "redraw this as anime" or
+  `/draw <tags>` redraws it. Backspace on an empty prompt (or a click) removes it
 - `ctrl+o` — open the newest link, PDF or image · `ctrl+y` — copy the last answer
 - `ctrl+b` — hide/show the sidebar · `ctrl+n` new chat · `ctrl+t` theme · `ctrl+q` quit
 
@@ -1077,6 +1099,7 @@ class JohanCommands(Provider):
         ("Normal mode", "normal_model", "back to the normal model"),
         ("Always-allow rules", "list_rules", "changes that run without asking; /rules forget N"),
         ("Draw an image…", "start_draw", "puts /draw in the prompt"),
+        ("Attach a picture…", "attach_file", "ctrl+f — pick a file; ctrl+v pastes one"),
         ("Research something…", "start_research", "deep research, a few minutes"),
         ("Review my mistakes", "review", "self-review; proposals go to Edits"),
         ("Refresh job postings", "refresh_jobs", "fetch new jobs, drop closed ones (~20 min)"),
@@ -1165,6 +1188,12 @@ class JohanApp(App):
     /* ---- chat */
     #chat { padding: 0 2 1 2; scrollbar-size-vertical: 1; }
     .msg-user { margin: 1 0 0 0; padding: 0 1; background: $surface; color: $text; }
+    .attached-pics { height: auto; padding: 0 1; background: $surface; }
+    .attached-pics > * { margin: 0 1 0 0; }
+    #attachments { height: auto; margin: 0 1; display: none; }
+    #attachments.has { display: block; }
+    #attachments > Button { min-width: 0; height: 1; border: none; margin: 0 1 0 0;
+                            padding: 0 1; background: $panel; color: $text; }
     Turn { height: auto; margin: 1 0 0 0; }
     .activity { border: none; padding: 0; margin: 0; background: transparent; }
     .activity > CollapsibleTitle { color: $text-muted; padding: 0 0 0 1; background: transparent; }
@@ -1267,6 +1296,7 @@ class JohanApp(App):
         Binding("ctrl+r", "refresh", "refresh", show=False),
         Binding("ctrl+t", "cycle_theme", "theme", show=False),
         Binding("ctrl+z", "rewind", "rewind", show=False),
+        Binding("ctrl+f", "attach_file", "attach", show=False),
     ]
 
     URL_RE = re.compile(r"https?://[^\s`\)\]<>\"']+")
@@ -1296,6 +1326,7 @@ class JohanApp(App):
         self.backlog_card = None   # an ApprovalCard for a change waiting from earlier
         self.plan_card = None      # the approved plan whose checklist is ticking
         self._asked = None
+        self.attachments = []      # pictures (paths in brain/uploads) for the next message
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="body"):
@@ -1307,6 +1338,7 @@ class JohanApp(App):
                 with TabPane("Images [$text-disabled]F4[/]", id="tab-images"):
                     yield ImagesPane(id="images")
             yield Sidebar()
+        yield Horizontal(id="attachments")
         with Horizontal(id="promptbox"):
             yield Static("›", id="caret")
             yield jw.PromptArea(placeholder=PROMPT_HINT, id="prompt", suggester=SlashSuggester())
@@ -1363,7 +1395,9 @@ class JohanApp(App):
         chat.remove_children()
         for m in messages:
             if m.get("role") == "user" and not str(m.get("content", "")).startswith("[Johan, internal]"):
-                chat.add(UserMsg(m["content"]))
+                chat.add(UserMsg(_attach.shown_text(m["content"])))
+                if m.get("image_paths"):
+                    chat.add(AttachedPics(m["image_paths"]))
             elif m.get("role") == "assistant" and m.get("content"):
                 t = chat.add(Turn())
                 t.set_text(jp.render_plan(jp.parse_plan(m["content"]))
@@ -1529,6 +1563,8 @@ class JohanApp(App):
 
     def on_button_pressed(self, event: Button.Pressed):
         bid = event.button.id or ""
+        if bid.startswith("att-"):
+            return self.remove_attachment(int(bid.split("-")[1]))
         if bid.startswith("start-"):
             _, prompt = Welcome.STARTERS[int(bid.split("-")[1])]
             box = self.query_one("#prompt")
@@ -1569,6 +1605,8 @@ class JohanApp(App):
             # waiting and comes back the next time Johan opens.
             card, self.backlog_card = self.backlog_card, None
             card.decided("left waiting — it'll be here next time", ok=False)
+        if not text and self.attachments and not self.busy:
+            text = _attach.DEFAULT_QUESTION       # a picture alone: "what's this?"
         if text:
             self._submit(text)
         elif self.pending is not None and not self.busy:
@@ -1601,6 +1639,7 @@ class JohanApp(App):
             "/theme": self.action_cycle_theme, "/refresh": self.action_refresh_jobs,
             "/rewind": self.action_rewind, "/undo": self.action_rewind,
             "/uncensored": self.action_uncensored, "/normal": self.action_normal_model,
+            "/attach": self.action_attach_file,
         }
         if cmd in handlers:
             return handlers[cmd]()
@@ -1656,17 +1695,85 @@ class JohanApp(App):
 
     # ------------------------------------------------------------ asking
 
-    def _ask(self, text, shown=None):
+    def _ask(self, text, shown=None, images=None):
         """`shown` is what appears in the chat when it differs from what the
-        model gets (a file command shows `/tldr <url>`, sends its prompt)."""
+        model gets (a file command shows `/tldr <url>`, sends its prompt).
+        Pictures: `images`, else whatever is attached right now."""
         self.query_one("#main", TabbedContent).active = "tab-chat"
         self._drop_welcome()
+        if images is None:
+            images, self.attachments = list(self.attachments), []
+            self._refresh_chips()
         self._chat().add(UserMsg(shown or text))
+        if images:
+            self._chat().add(AttachedPics(images))
         tid = jx.new_turn()
         self.turn_ids[len(self.messages)] = tid
         self.turn_tools[tid] = []
-        self.messages.append({"role": "user", "content": text})
+        self.messages.append(_attach.user_message(text, images))
         self._start_turn(plan_check=True)
+
+    # ---- attached pictures (johan_attach.py) ------------------------------
+
+    def attach_paths(self, paths):
+        """Attach pictures: copied into brain/uploads, shown as chips."""
+        added = []
+        for p in paths:
+            try:
+                added.append(str(_attach.keep(p)))
+            except Exception as e:
+                self._toast(f"couldn't attach {Path(p).name}: {e}", "attach", True)
+        self.attachments += added
+        self._refresh_chips()
+        if added:
+            self.query_one("#prompt").focus()
+        return added
+
+    def remove_attachment(self, i=-1):
+        if self.attachments:
+            self.attachments.pop(i)
+            self._refresh_chips()
+
+    def _refresh_chips(self):
+        row = self.query_one("#attachments", Horizontal)
+        row.remove_children()
+        for i, p in enumerate(self.attachments):
+            wh = _attach.size_of(p)
+            label = f"📎 {_attach.display_name(p)}" + (f" ({wh[0]}×{wh[1]})" if wh else "") + "  ✕"
+            # ids must be unique even while the old chips are still being removed
+            row.mount(Button(label, id=f"att-{i}-{time.monotonic_ns()}"))
+        row.set_class(bool(self.attachments), "has")
+
+    def paste_clipboard(self):
+        """ctrl+v in the prompt: a picture on the clipboard is attached, text
+        is pasted. The terminal can't hand a picture to the app (WezTerm only
+        forwards text), so Johan reads the clipboard itself with xclip.
+        False = xclip gave nothing at all; the prompt falls back to its own."""
+        img = _attach.clipboard_image()
+        if img is not None:
+            self.attach_paths([img])
+            return True
+        text = _attach.clipboard_text()
+        if text is None:
+            return False
+        paths = _attach.dropped_paths(text)
+        if paths:
+            self.attach_paths(paths)
+        elif text:
+            self.query_one("#prompt").insert(text)
+        return True
+
+    def action_attach_file(self):
+        self.pick_worker()
+
+    @work(thread=True, exclusive=True, group="pick")
+    def pick_worker(self):
+        path = _attach.pick_file()
+        if path and _attach.is_image(path):
+            self.call_from_thread(self.attach_paths, [path])
+        elif path:
+            self.call_from_thread(self._toast, "that isn't a picture Johan can read",
+                                  "attach", True)
 
     def _start_turn(self, plan_check=False, replan=None):
         self.cancel.clear()
@@ -1971,6 +2078,10 @@ class JohanApp(App):
         ref, strength, arg = _split_reference(arg)
         if not arg:
             return self._note("what should I draw? — /draw [picture] tags", "err")
+        if ref is None and self.attachments:     # the attached picture is the reference
+            ref = self.attachments.pop(0)
+            shown = f"{shown}  (redrawing {_attach.display_name(ref)})"
+            self._refresh_chips()
         self.query_one("#main", TabbedContent).active = "tab-chat"
         self._drop_welcome()
         self._chat().add(UserMsg(f"/draw {shown}"))
@@ -2099,16 +2210,17 @@ class JohanApp(App):
         self.warm_up()           # a new chat's first question re-reads the prefix
 
     def action_retry(self):
-        last = next((m["content"] for m in reversed(self.messages or [])
-                     if m.get("role") == "user"
-                     and not str(m.get("content", "")).startswith(("[", "draw:"))), None)
-        if not last:
+        idx = next((i for i in range(len(self.messages or []) - 1, -1, -1)
+                    if self.messages[i].get("role") == "user"
+                    and not str(self.messages[i].get("content", "")).startswith(("[", "draw:"))),
+                   None)
+        if idx is None:
             return self._note("nothing to retry yet", "err")
+        last = self.messages[idx]
         # Drop the previous attempt so the retry isn't primed by it.
-        idx = max(i for i, m in enumerate(self.messages)
-                  if m.get("role") == "user" and m.get("content") == last)
         self.messages = self.messages[:idx]
-        self._ask(last)
+        self._ask(_attach.shown_text(last["content"]),
+                  images=[p for p in last.get("image_paths", []) if Path(p).is_file()])
 
     def _last_user_idx(self):
         return next((i for i in range(len(self.messages or []) - 1, 0, -1)
@@ -2158,7 +2270,11 @@ class JohanApp(App):
                         "rewound")
 
     def _rewind_chat(self, idx):
-        text = str(self.messages[idx].get("content", ""))
+        text = _attach.shown_text(self.messages[idx].get("content", ""))
+        pics = [p for p in self.messages[idx].get("image_paths", []) if Path(p).is_file()]
+        if pics:                       # his pictures come back with the question
+            self.attachments = pics + [p for p in self.attachments if p not in pics]
+            self._refresh_chips()
         if text.startswith("draw: "):
             text = "/draw " + text[6:]
         self.messages = self.messages[:idx]
