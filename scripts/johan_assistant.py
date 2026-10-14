@@ -705,6 +705,12 @@ RESEARCH_HINT = re.compile(r"\b(research|dig into|deep[- ]dive|look into|in dept
                            r"investigate|thorough(ly)?|properly)\b", re.I)
 
 
+# "research X and draw/write/set up Y": look things up, then do the thing.
+MAKE_NOTE = ("He wants something made or done, and looking things up is only a step. "
+             "First look up what you need (web_search / wikipedia / fetch_page), then do "
+             "what he asked in this same turn — don't stop at a summary.")
+
+
 def _maybe_research(q, on_tool, on_delta, should_stop):
     """Run deep_research directly when he explicitly asks for it.
 
@@ -721,6 +727,13 @@ def _maybe_research(q, on_tool, on_delta, should_stop):
         return None
     if not (d.choice == "yes" and d.confident):
         return None
+    try:
+        g = jd.decide(jd.GOAL_Q, jd.GOAL_OPTS, f"Message: {q}",
+                      kind="research_goal", null_context=jd.NULLS["research_goal"])
+        if g.choice == "make" and g.confident:
+            return MAKE_NOTE      # research is a step: the normal loop does both
+    except Exception:
+        pass
     # Progress streams into the answer bubble; the returned report replaces it.
     progress = (lambda m: on_delta(f"_{m}_\n")) if on_delta else None
     res = _research.deep_research(q, on_progress=progress, should_stop=should_stop)
@@ -766,13 +779,19 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
     start = len(messages)
     q = _last_user_message(messages)
     report = _maybe_research(q, on_tool, on_delta, should_stop)
-    if report is not None:
+    note = None
+    if report is MAKE_NOTE:
+        note = {"role": "system", "content": MAKE_NOTE}
+        messages.append(note)
+    elif report is not None:
         messages.append({"role": "assistant", "content": report})
         return report
     if not _is_trivial(q):
         _skills.inject(messages, q)        # a matching recipe from skills/, before his message
     answer = run_turn_loop(messages, max_hops=max_hops, on_tool=on_tool,
                            on_delta=on_delta, should_stop=should_stop)
+    if note is not None and note in messages:
+        messages.remove(note)          # a one-turn instruction, not history
     if _plan.ended_by_ask(messages, start):
         return answer          # a question to him, not facts to verify
     # Small talk ending "code or game?" is conversation, not an ambiguous

@@ -2265,7 +2265,8 @@ class JohanApp(App):
             jr.write_report(result, jr._low_confidence(7), staged, 7)
             fixed = sum(1 for c in result["clusters"].values() if c["fixed"])
             msg = (f"{len(result['clusters'])} kinds of failure ({fixed} already fixed) · "
-                   f"{len(staged)} proposal{'s' * (len(staged) != 1)} — shown below for your OK")
+                   + (f"{len(staged)} proposal{'s' * (len(staged) != 1)} — shown below for your OK"
+                    if staged else "nothing worth proposing this time"))
             self.call_from_thread(self._note, f"self-review: {msg}", "ok")
             self.call_from_thread(self._toast, msg, "self-review done")
         except Exception as e:

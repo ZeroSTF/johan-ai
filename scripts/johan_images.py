@@ -421,8 +421,9 @@ TOOL = {"type": "function", "function": {
     # A small model copies examples literally — describe the format instead.
     "description": (
         "Draw a picture on his GPU (uncensored, ~40 s, anime/illustration). "
-        "`prompt` is danbooru tags — subject/count (1girl, no humans…) then ONLY "
-        "the details he gave; add nothing he didn't ask for. A picture he points at goes in "
+        "`prompt` is danbooru tags — first who it is (1boy / 1girl / no humans — match "
+        "the subject's real sex), a known character as `name, series`, then ONLY the "
+        "details he gave or you looked up; add nothing else. A picture he points at goes in "
         "`reference` to redraw it. Tell him where it saved; ctrl+o opens it."),
     "parameters": {"type": "object", "properties": {
         "prompt": {"type": "string"},

@@ -118,6 +118,15 @@ RESEARCH_OPTS = {"yes": "he explicitly asks for research, a deep dive, or to "
                  "no": "an ordinary question, or a quick lookup"}
 NULLS["research_intent"] = "Message: N/A"
 
+# Asked only when research_intent said yes: "research X and draw him" wants a
+# picture, not a report. The forced research used to answer every such
+# message with a report and stop (10/10 on its first labeled set).
+GOAL_Q = "What does Riadh want Johan to hand back for this message?"
+GOAL_OPTS = {"report": "an answer or report about the topic: facts, a comparison, an explanation",
+             "make": "something made or done with what is learned: a picture, a drawing, code, a "
+                     "file, a change on his machine, or a text for someone"}
+NULLS["research_goal"] = "Message: N/A"
+
 MULTI_Q = "How many separate lookups does answering this message take?"
 MULTI_OPTS = {"yes": "several lookups in a row, where a later one needs the "
                      "result of an earlier one",

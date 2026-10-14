@@ -202,6 +202,7 @@ CASES = [
          prompt="in one sentence, what is the difference between TCP and UDP?",
          expect_none=True,
          why="general knowledge needs no tool; over-calling wastes a hop"),
+    # --- added by johan_review (approved in F4) ---
 ]
 
 

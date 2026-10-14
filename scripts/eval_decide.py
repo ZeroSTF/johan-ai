@@ -22,7 +22,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import johan_assistant as ja          # noqa: E402
 from johan_decide import (decide, ROUTE, ROUTE_Q, DONE_Q, DONE_OPTS,  # noqa: E402
                           SUPPORT_Q, SUPPORT_OPTS, RISKY_Q, RISKY_OPTS, NULLS,
-                          MULTI_Q, MULTI_OPTS, RESEARCH_Q, RESEARCH_OPTS)
+                          MULTI_Q, MULTI_OPTS, RESEARCH_Q, RESEARCH_OPTS,
+                          GOAL_Q, GOAL_OPTS)
 
 ROUTE_CASES = [
     ("can you check my tf2 custom config?", "local"),
@@ -145,6 +146,19 @@ RESEARCH_CASES = [
     ("dig up the cv you made for supabase", "no"),
 ]
 
+# research_intent said yes: is the research the goal, or a step toward a
+# made thing? (the first real miss: "draw yourself an icon after research".)
+GOAL_CASES = [
+    ("draw yourself an icon, knowing your name and after doing research about its meaning (johan from monster anime)", "make"),
+    ("research johan liebert from monster and draw him", "make"),
+    ("look into how nginx reverse proxies work properly and then set one up for me", "make"),
+    ("research the company properly and write me a cover letter for supabase", "make"),
+    ("investigate thoroughly which linux distros handle nvidia optimus best", "report"),
+    ("research this properly: what are the keyboard controls in Lisa the Painful?", "report"),
+    ("can you dig into which EOR companies can hire in Tunisia", "report"),
+    ("do a deep dive on qwen3.5 vs gemma 4 for tool calling", "report"),
+]
+
 # Corrections of Johan's BEHAVIOUR (saved as rules) vs everything else that
 # passes johan_learn's pre-filter: fact corrections, commands, questions.
 from johan_learn import FEEDBACK_Q, FEEDBACK_OPTS, _context as _fb_ctx  # noqa: E402
@@ -174,11 +188,17 @@ KINDS = {
     "feedback": [(FEEDBACK_Q, FEEDBACK_OPTS, _fb_ctx(p, m), w) for p, m, w in FEEDBACK_CASES],
     "route": [(ROUTE_Q, ROUTE, f"Message: {m}", want) for m, want in ROUTE_CASES],
     "research_intent": [(RESEARCH_Q, RESEARCH_OPTS, f"Message: {m}", w) for m, w in RESEARCH_CASES],
+    "research_goal": [(GOAL_Q, GOAL_OPTS, f"Message: {m}", w) for m, w in GOAL_CASES],
     "multi_step": [(MULTI_Q, MULTI_OPTS, f"Message: {m}", w) for m, w in MULTI_CASES],
     "step_done": [(DONE_Q, DONE_OPTS, c, want) for c, want in DONE_CASES],
     "supported": [(SUPPORT_Q, SUPPORT_OPTS, c, want) for c, want in SUPPORT_CASES],
     "risky": [(RISKY_Q, RISKY_OPTS, c, want) for c, want in RISKY_CASES],
 }
+HOLDOUT["research_goal"] = [(GOAL_Q, GOAL_OPTS, f"Message: {m}", w) for m, w in [
+    ("dig into what the name johan means and make me a logo from it", "make"),
+    ("research how people tune pipewire latency, then change my settings", "make"),
+    ("research properly whether tunisian freelancers can use wise", "report"),
+    ("deep dive into why qwen models think so long", "report")]]
 HOLDOUT["feedback"] = [(FEEDBACK_Q, FEEDBACK_OPTS, _fb_ctx(p, m), w) for p, m, w in [
     ("Great question! Let me explain in detail...", "quit writing essays, keep it to two lines", "yes"),
     ("I checked with run_command: you have 2,260 packages.",
