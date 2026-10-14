@@ -201,8 +201,13 @@ def ask_result_of(results):
 # explanation. A request phrased politely ("can you set up…") is still a
 # request, so can/could/would/please are NOT on this list.
 _QUESTION = re.compile(
-    r"^\s*(what|what's|whats|how|why|which|who|where|when|is|are|was|were|does|"
-    r"do|did|should|explain|tell me (about|why|how|what))\b", re.I)
+    r"^\s*(?:(?:can|could|would|will) you\s+|please\s+)?"
+    r"(what|what's|whats|how|why|which|who|where|when|is|are|was|were|does|"
+    r"do|did|should|explain|tell me (about|why|how|what)|show me how|teach me)\b", re.I)
+# Writing about something is not doing it: "tidy up this paragraph: we set
+# up the server…" got a plan card (the check said yes, confidently).
+_WRITING = re.compile(r"\b(paragraph|sentence|text|email|e-mail|message|essay|letter|"
+                      r"post|tweet|wording|grammar)\b", re.I)
 
 # Verbs whose job is inherently several steps.
 _BIG = re.compile(
@@ -235,6 +240,8 @@ def prefilter(text):
     docker AND add me to the group", "draft CVs for the top 3, then compare")."""
     t = (text or "").strip()
     if len(t) < 12 or t.startswith("/") or _QUESTION.search(t):
+        return False
+    if _WRITING.search(t.split(":")[0]):
         return False
     if _BIG.search(t):
         return True

@@ -165,6 +165,10 @@ PRE = [
     ("hi", False, "trivial"),
     ("/draw a castle and a dragon", False, "slash commands never plan"),
     ("can you uninstall vlc, then install mpv?", True, "polite request is still a request"),
+    ("can you explain how to set up docker compose?", False, "polite HOW question: explain"),
+    ("tidy up this paragraph: we set up the server and migrated the db", False,
+     "writing about a setup is not doing one"),
+    ("could you set up nginx for me", True, "polite request to DO it"),
 ]
 for msg, want, why in PRE:
     check(f"prefilter({msg!r}) — {why}", jp.prefilter(msg), want)
