@@ -27,6 +27,7 @@ Design notes worth keeping (each one cost real time once):
 
     johan             open this
     johan "question"  one-shot answer, no UI
+    johan --uncensored start in uncensored mode
     johan --continue  reopen the last conversation
     johan --resume    pick a past conversation (or --resume <id>)
 """
@@ -932,7 +933,7 @@ HELP_MD = """\
   made (one confirmation listing exactly what, and what can't be undone), and puts your
   question back in the box to edit
 - `/review` — Johan reviews its own mistakes; its proposals show up here for your OK
-- `/uncensored` — swap to the uncensored model for this chat (same tools); `/normal` switches back, a new chat starts normal
+- `/uncensored` — swap to the uncensored model for this chat (same tools); `/normal` switches back, a new chat keeps the current model
 - `/refresh` — fetch new job postings, drop closed ones, rebuild the queue
   (~20 min in the background; `/refresh` again shows progress; `R` in Jobs)
 - `/new` — fresh chat · `/history` — past chats
@@ -1607,20 +1608,42 @@ class JohanApp(App):
         else. Sending the real prefix leaves a context checkpoint that a new
         question restores: measured 31 s → 3-4 s to the first answer. The
         payload must match call_model's (same system text, tools, num_ctx)."""
+        self._warm_up_model(ja.MODEL)
+
+    def _warm_up_model(self, model):
         import requests
         msgs = list(self.messages or [])[:1] or [
             {"role": "system", "content": ja.prime_with_memories(ja.SYSTEM_PROMPT)}]
         try:
-            requests.post("http://127.0.0.1:11434/api/chat", timeout=180, json={
-                "model": ja.MODEL, "messages": msgs + [{"role": "user", "content": "hi"}],
+            response = requests.post("http://127.0.0.1:11434/api/chat", timeout=180, json={
+                "model": model, "messages": msgs + [{"role": "user", "content": "hi"}],
                 "tools": ja.TOOLS, "think": False, "stream": False,
                 "keep_alive": ja.KEEP_ALIVE,
                 "options": {"temperature": 0.3, "num_ctx": ja.NUM_CTX, "num_predict": 1}})
+            response.raise_for_status()
             self.call_from_thread(self._set_status, None)
             self.call_from_thread(self._refresh_sidebar)
-        except Exception:
+            # Ollama can finish the chat response just before /api/ps exposes
+            # the runner as loaded. Re-read it after the runner settles.
+            self.call_from_thread(self.set_timer, 1.0, self._refresh_sidebar)
+        except requests.RequestException as e:
             self.call_from_thread(self._set_status,
-                                  "[$error]Ollama unreachable — is Johan paused (GameMode)?[/]")
+                                  f"[$error]model warm-up failed: {e}[/]")
+
+    @work(thread=True, exclusive=True, group="warm")
+    def _switch_model(self, model):
+        old_model = ja.MODEL
+        self.call_from_thread(self._set_status, f"switching to {model} — unloading {old_model}…")
+        if not ja.release_model(old_model):
+            self.call_from_thread(
+                self._set_status,
+                "[$error]couldn't unload the current model; switch cancelled[/]",
+            )
+            return
+        ja.use_model(model)
+        self.call_from_thread(self._status_right)
+        self.call_from_thread(self._set_status, f"loading {model}…")
+        self._warm_up_model(model)
 
     def _refresh_sidebar(self):
         self.query_one(Sidebar).refresh_state(self.messages)
@@ -2387,27 +2410,21 @@ class JohanApp(App):
             return self._toast("already uncensored — /normal switches back")
         if not ja.model_installed(ja.UNCENSORED_MODEL):
             return self._note(f"the uncensored model ({ja.UNCENSORED_MODEL}) isn't installed", "err")
-        ja.use_model(ja.UNCENSORED_MODEL)
-        self._note("uncensored mode for this chat — same tools; /normal switches back", "ok")
-        self._status_right()
-        self.warm_up()            # load it now (~10-15 s), not on the next question
+        self._note("switching to uncensored mode…", "ok")
+        self._switch_model(ja.UNCENSORED_MODEL)
 
     def action_normal_model(self):
         if self.busy:
             return self._toast("still working — esc first")
         if not ja.is_uncensored():
             return self._toast("already in normal mode")
-        ja.use_model(ja.NORMAL_MODEL)
-        self._note("back to normal mode", "ok")
-        self._status_right()
-        self.warm_up()
+        self._note("switching back to normal mode…", "ok")
+        self._switch_model(ja.NORMAL_MODEL)
 
     def action_new_chat(self):
         if self.busy:
             return self._toast("still working — esc first")
         ja.LAST_USAGE.update(prompt_tokens=0, completion_tokens=0)
-        if ja.is_uncensored():
-            ja.use_model(ja.NORMAL_MODEL)     # a new chat always starts normal
         ja.new_session()
         self.query_one("#main", TabbedContent).active = "tab-chat"
         self._fresh()
@@ -2784,6 +2801,7 @@ class JohanApp(App):
 def main():
     args = sys.argv[1:]
     resume = "--continue" in args or "-c" in args
+    uncensored = "--uncensored" in args
     pick, session = False, None
     for flag in ("--resume", "-r"):
         if flag in args:
@@ -2793,6 +2811,12 @@ def main():
                 session = nxt
             else:
                 pick = True
+    if uncensored:
+        if not ja.model_installed(ja.UNCENSORED_MODEL):
+            print(f"johan: the uncensored model ({ja.UNCENSORED_MODEL}) isn't installed",
+                  file=sys.stderr)
+            raise SystemExit(1)
+        ja.use_model(ja.UNCENSORED_MODEL)
     try:
         JohanApp(resume=resume, pick=pick, session=session).run()
     finally:

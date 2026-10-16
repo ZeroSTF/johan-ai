@@ -1117,15 +1117,17 @@ def load_session(session_id=None):
         return None
 
 
-def release_model():
+def release_model(model=None):
     """Unload the model from VRAM now (keep_alive: 0).
 
     KEEP_ALIVE keeps it resident for fast follow-up prompts, which would
     otherwise mean 3.3 GB squatting in VRAM for 20 minutes after you quit.
     Called on every exit path so "closed Johan" means "VRAM is free"."""
+    model = model or MODEL
     try:
-        requests.post(OLLAMA_CHAT, timeout=20, json={
-            "model": MODEL, "messages": [], "keep_alive": 0})
+        response = requests.post(OLLAMA_CHAT, timeout=20, json={
+            "model": model, "messages": [], "keep_alive": 0})
+        response.raise_for_status()
         return True
     except requests.RequestException:
         return False
@@ -1313,7 +1315,16 @@ def main():
                     help="resume the previous conversation")
     ap.add_argument("--resume", "-r", nargs="?", const="", default=None,
                     help="a one-shot answer inside that conversation (no id: the last)")
+    ap.add_argument("--uncensored", action="store_true",
+                    help="use the uncensored model for this invocation")
     args = ap.parse_args()
+
+    if args.uncensored:
+        if not model_installed(UNCENSORED_MODEL):
+            print(f"the uncensored model ({UNCENSORED_MODEL}) isn't installed",
+                  file=sys.stderr)
+            raise SystemExit(1)
+        use_model(UNCENSORED_MODEL)
 
     messages = None
     if args.cont or args.resume is not None:

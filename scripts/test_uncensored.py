@@ -2,7 +2,7 @@
 
 Checked: every kind of model call (chat, decide, plan) uses the selected
 model — a mix would reload models every few seconds on a 6 GB card; a new
-chat starts normal; a missing model is refused with a clear note; the status
+chat keeps the selected model; a missing model is refused with a clear note; the status
 line says "uncensored". Model calls are stubbed — no GPU, nothing under brain/.
 
     python test_uncensored.py
@@ -65,7 +65,9 @@ async def tui_checks():
         setattr(obj, name, val)
     warmed = []
     stub(tui.JohanApp, "warm_up", lambda self: warmed.append(ja.MODEL))
+    stub(tui.JohanApp, "_warm_up_model", lambda self, model: warmed.append(model))
     stub(tui.Sidebar, "refresh_state", lambda self, messages=None: None)
+    stub(ja, "release_model", lambda model=None: True)
     stub(ja, "save_session", lambda m: None)
     stub(ja, "log_session", lambda m: None)
     try:
@@ -88,12 +90,11 @@ async def tui_checks():
             check("…and loads it right away", warmed[-1:] == [ja.UNCENSORED_MODEL])
             status = str(app.query_one("#statusr").render())
             check("the status line says uncensored", "uncensored" in status)
-            await say("/normal")
-            check("/normal switches back", ja.MODEL == ja.NORMAL_MODEL)
-            await say("/uncensored")
             await pilot.press("ctrl+n")
             await pilot.pause()
-            check("a new chat starts normal", ja.MODEL == ja.NORMAL_MODEL)
+            check("a new chat keeps uncensored mode", ja.MODEL == ja.UNCENSORED_MODEL)
+            await say("/normal")
+            check("/normal switches back", ja.MODEL == ja.NORMAL_MODEL)
     finally:
         for (obj, name), val in saved.items():
             setattr(obj, name, val)
