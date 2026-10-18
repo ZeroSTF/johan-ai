@@ -1697,7 +1697,10 @@ class JohanApp(App):
         secs = time.monotonic() - self.busy_since
         self.query_one("#status", Static).update(
             mk(f"{SPINNER[self._spin]} $b…  [$text-muted]{secs:.0f}s  ·  esc to stop[/]",
-               b=str(self.busy_label)))
+               # a card is open: that's what he's waiting on, whatever the
+               # last tool's label says ("running a command… 36s" was shown
+               # while the turn sat waiting for his OK)
+               b="waiting for your OK" if self.approval is not None else str(self.busy_label)))
 
     def _stop_busy(self):
         self.busy = False
@@ -2030,7 +2033,9 @@ class JohanApp(App):
         self.approval = (card, ev, box)
         self.busy_label = "waiting for your OK"
         card.choices.focus()
-        self._chat().scroll_end(animate=False)
+        # After layout: scrolling at mount time stopped above a tall card, so
+        # its 1/2 choices were off screen and the turn looked frozen.
+        self.call_after_refresh(lambda: card.choices.scroll_visible(animate=False))
 
     def _resolve_approval(self, decision, text, ok=True):
         if self.approval is None:

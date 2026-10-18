@@ -226,6 +226,12 @@ check("escaped \\( and quoted globs work together",
       .get("output", ""), True)
 check("an unquoted glob is still expanded", "test_matching.py" in
       _jt.run_command(f"ls {_here}/test_match*").get("output", ""), True)
+# `cd DIR && ls` is how the model writes it; with no shell, cd used to fall
+# through to an approval card for a plain read.
+_r = _jt.run_command(f"cd {_here} && ls test_matching.py")
+check("cd sets the folder for the rest of the chain", "test_matching.py" in _r.get("output", ""), True)
+check("cd into ~/.ssh is still refused", bool(_err("cd ~/.ssh && ls")), True)
+check("a relative secret after cd is still refused", bool(_err("cd ~/johan/compose && cat .env")), True)
 check("a quoted | is grep's, not a pipe", _jt.run_command(f"grep -c 'zzq|zzr' {_here}/test_matching.py")
       .get("exit_code"), 0)
 check("2>&1 is stripped", _err("ls /tmp 2>&1") is None, True)

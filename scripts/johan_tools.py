@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import urllib.parse
 from datetime import datetime, timezone
@@ -726,11 +727,26 @@ SCRATCHPAD = PROJECT_ROOT / "brain/scratchpad.txt"
 SCRATCHPAD_MAX = 600
 
 
+# Notes belong to the chat that wrote them. They used to be global and go
+# into EVERY prompt: a test chat's "he wants a high score system" surfaced in
+# the next, unrelated chat as "that high score system we talked about".
+_SESSION_TAG = "#chat "
+
+
+def _session_id():
+    ja = sys.modules.get("johan_assistant")
+    return getattr(ja, "SESSION_ID", None) if ja else None
+
+
 def scratchpad_read():
     try:
-        return SCRATCHPAD.read_text().strip()
+        raw = SCRATCHPAD.read_text().strip()
     except OSError:
         return ""
+    first, _, rest = raw.partition("\n")
+    if first.startswith(_SESSION_TAG):
+        return rest.strip() if first[len(_SESSION_TAG):].strip() == str(_session_id()) else ""
+    return raw          # an untagged note from before this change
 
 
 def scratchpad_write(text, append=False):
@@ -745,7 +761,7 @@ def scratchpad_write(text, append=False):
         # Keep the END: the newest note is the one still relevant.
         new = new[-SCRATCHPAD_MAX:]
     SCRATCHPAD.parent.mkdir(parents=True, exist_ok=True)
-    SCRATCHPAD.write_text(new)
+    SCRATCHPAD.write_text(f"{_SESSION_TAG}{_session_id()}\n{new}")
     return {"saved": True, "chars": len(new), "limit": SCRATCHPAD_MAX,
             "truncated_oldest": truncated, "scratchpad": new}
 
@@ -1000,7 +1016,7 @@ def _child_env():
     return env
 
 
-def _exec_pipeline(stages, timeout, env):
+def _exec_pipeline(stages, timeout, env, cwd=None):
     """Run one validated pipeline. Returns (output, exit_code).
 
     Raises nothing the caller doesn't expect: FileNotFoundError and
@@ -1012,7 +1028,7 @@ def _exec_pipeline(stages, timeout, env):
                 stage, env=env, stdin=(prev.stdout if prev else None),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE if i == len(stages) - 1 else subprocess.DEVNULL,
-                text=True, cwd=str(PROJECT_ROOT)))
+                text=True, cwd=cwd or str(PROJECT_ROOT)))
             if prev:
                 prev.stdout.close()      # let an upstream stage see SIGPIPE
             prev = procs[-1]
@@ -1134,6 +1150,7 @@ def run_command(command, timeout=20):
     # Parse and validate EVERYTHING before running ANYTHING — a chain must
     # not half-execute and then report a rejection from a later link.
     plan = []
+    plan_cwd = [str(PROJECT_ROOT)]
     for op, seg_tokens in segments:
         if not seg_tokens:
             return {"error": "empty command around a &&, || or ; operator"}
@@ -1145,6 +1162,24 @@ def run_command(command, timeout=20):
                 stages[-1].append(tok)
         if any(not s for s in stages):
             return {"error": "empty stage in the pipeline"}
+        # `cd DIR && ls -la`: the model writes it constantly, and with no
+        # shell `cd` wasn't a program — a harmless read became an approval
+        # card. It now sets the folder the rest of the chain runs in; the
+        # folder passes the same checks as `ls DIR` (so ~/.ssh stays refused).
+        if stages[0] and stages[0][0] == "cd":
+            if len(stages) > 1 or len(stages[0]) > 2:
+                return _blocked("`cd` takes one folder and can't be piped")
+            target = os.path.expanduser(stages[0][1] if len(stages[0]) > 1 else "~")
+            if not os.path.isabs(target):
+                target = os.path.join(plan_cwd[0], target)
+            problem = _check_command(["ls", target])
+            if problem:
+                return _blocked(problem)
+            if not os.path.isdir(target):
+                return {"error": f"cd: no such folder: {target}"}
+            plan_cwd[0] = os.path.normpath(target)
+            plan.append((op, ("cd", plan_cwd[0])))
+            continue
         if len(stages) > 4:
             return _blocked("at most 4 piped stages")
 
@@ -1173,6 +1208,7 @@ def run_command(command, timeout=20):
     env = _child_env()
     budget = min(int(timeout or 20), 60)
     chunks, rc, ran, missing = [], 0, [], []
+    cwd = str(PROJECT_ROOT)
     started = time.monotonic()
     for op, stages in plan:
         # Honour the operator's semantics rather than running everything:
@@ -1182,11 +1218,15 @@ def run_command(command, timeout=20):
             continue
         if op == "||" and rc == 0:
             continue
+        if isinstance(stages, tuple):          # ("cd", folder)
+            cwd, rc = stages[1], 0
+            ran.append(f"cd {cwd}")
+            continue
         left = budget - (time.monotonic() - started)
         if left <= 0:
             return {"error": f"timed out after {budget}s"}
         try:
-            out, rc = _exec_pipeline(stages, left, env)
+            out, rc = _exec_pipeline(stages, left, env, cwd)
         except FileNotFoundError as e:
             # A missing binary is that link failing (shell rc 127), not the
             # chain dying. `dpkg -l && flatpak list && snap list` threw away
@@ -1966,12 +2006,33 @@ def scratchpad(text=None, append=False, clear=False):
     return {"notes": scratchpad_read() or "(empty)"}
 
 
+_HEREDOC = re.compile(
+    r"""^\s*(?:mkdir\s+-p\s+\S+\s*&&\s*)?cat\s*(?:>\s*(?P<p1>\S+)\s*<<-?\s*|<<-?\s*)"""
+    r"""(?P<q>['"]?)(?P<tag>\w+)(?P=q)(?:\s*>\s*(?P<p2>\S+))?[ \t]*\n(?P<body>.*?)\n(?P=tag)\s*$""",
+    re.S)
+
+
+def _heredoc_write(command):
+    m = _HEREDOC.match(str(command or ""))
+    if not m or not (m.group("p1") or m.group("p2")):
+        return None
+    path = (m.group("p1") or m.group("p2")).strip("'\"")
+    return os.path.expanduser(path), m.group("body") + "\n"
+
+
 def run_command_tool(command=None, page=None, timeout=20, why=None):
     """run_command + read_output as one tool: `page` pages the last output."""
     if page and not command:
         return read_output(page=page)
     if not command:
         return {"error": "run_command needs `command` (or `page` to read more of the last output)"}
+    heredoc = _heredoc_write(command)
+    if heredoc:
+        # `cat > game.html << 'EOF' … EOF` is how the model writes files. As
+        # a raw command it was a wall of code on an approval card with no
+        # diff, no backup and no undo; as a file write it gets all three.
+        path, content = heredoc
+        return write_file(path, content, why=why or "")
     out = run_command(command, timeout=timeout)
     if out.pop("blocked", False):
         # Outside the read-only list: like Claude Code, ask him — the card
