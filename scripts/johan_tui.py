@@ -1626,14 +1626,20 @@ class JohanApp(App):
             # Ollama can finish the chat response just before /api/ps exposes
             # the runner as loaded. Re-read it after the runner settles.
             self.call_from_thread(self.set_timer, 1.0, self._refresh_sidebar)
-        except requests.RequestException as e:
-            self.call_from_thread(self._set_status,
-                                  f"[$error]model warm-up failed: {e}[/]")
+        except Exception as e:       # noqa: BLE001 - a worker error would close the app
+            # The error text goes in as a $variable, never as markup:
+            # "[Errno 111] Connection refused" is parsed as a tag otherwise.
+            hint = (" — is Johan paused (GameMode)?"
+                    if isinstance(e, requests.ConnectionError) else "")
+            self.call_from_thread(self._set_status, mk(
+                "[$error]model warm-up failed: $err$hint[/]",
+                err=f"{type(e).__name__}: {str(e)[:120]}", hint=hint))
 
     @work(thread=True, exclusive=True, group="warm")
     def _switch_model(self, model):
         old_model = ja.MODEL
-        self.call_from_thread(self._set_status, f"switching to {model} — unloading {old_model}…")
+        self.call_from_thread(self._set_status, mk("switching to $new — unloading $old…",
+                                                   new=model, old=old_model))
         if not ja.release_model(old_model):
             self.call_from_thread(
                 self._set_status,
@@ -1642,7 +1648,7 @@ class JohanApp(App):
             return
         ja.use_model(model)
         self.call_from_thread(self._status_right)
-        self.call_from_thread(self._set_status, f"loading {model}…")
+        self.call_from_thread(self._set_status, mk("loading $m…", m=model))
         self._warm_up_model(model)
 
     def _refresh_sidebar(self):
