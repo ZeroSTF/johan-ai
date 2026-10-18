@@ -34,13 +34,16 @@ BROKEN = """<!doctype html><html><body><canvas id=c></canvas>
 <script>const ctx = document.getElementById('c').getContext('2d'); drawSnake();</script></body></html>"""
 CLICKY = """<!doctype html><html><body><p id=t>You are in a room.</p>
 <button onclick="document.getElementById('t').textContent='You open the door.'">Open the door</button></body></html>"""
+TEXT_ONLY = """<!doctype html><html><body><p id=k>Last key:</p><canvas id=c width=200 height=200></canvas>
+<script>const ctx = document.getElementById('c').getContext('2d'); ctx.fillStyle = '#0f0'; ctx.fillRect(150, 90, 20, 20);
+document.addEventListener('keydown', e => document.getElementById('k').textContent = 'Last key: ' + e.key);</script></body></html>"""
 STILL = """<!doctype html><html><body><h1>Snake</h1><p>Press any key</p></body></html>"""
 
 home_tmp = Path(tempfile.mkdtemp(prefix="johan-trypage-", dir=Path.home() / ".cache"))
 real_dir = jt.TRY_DIR
 jt.TRY_DIR = Path(tempfile.mkdtemp())
 try:
-    for name, html in (("good", GOOD), ("broken", BROKEN), ("still", STILL), ("clicky", CLICKY)):
+    for name, html in (("good", GOOD), ("broken", BROKEN), ("still", STILL), ("clicky", CLICKY), ("textonly", TEXT_ONLY)):
         (home_tmp / f"{name}.html").write_text(html)
 
     r = jt.try_page(str(home_tmp / "good.html"), keys="ArrowRight ArrowRight", look=False)
@@ -57,6 +60,10 @@ try:
     r = jt.try_page(str(home_tmp / "still.html"), keys=["ArrowUp"], look=False)
     check("a page that never moves says so", r.get("moves_by_itself") is False)
     check("…and that the keys changed nothing", r.get("changed_after_keys") is False)
+
+    r = jt.try_page(str(home_tmp / "textonly.html"), keys="ArrowLeft ArrowUp", look=False)
+    check("a game whose canvas never moves fails, even if a debug text line changes",
+          r.get("changed_after_keys") is False and "in the game area" in " ".join(r.get("problems", [])))
 
     r = jt.try_page(str(home_tmp / "clicky.html"), click="Open the door", look=False)
     check("a button is clicked by its text", r.get("clicked") == ["Open the door"]

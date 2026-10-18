@@ -423,7 +423,8 @@ def try_page(path, keys=None, click=None, look=True):
         what = " / ".join((res.get("keys_pressed") or []) + [f"click {c}" for c in res.get("clicked") or []])
         hint = (f" — maybe it needs a button first: {', '.join(res['buttons'][:4])} (use click=)"
                 if res.get("buttons") else "")
-        problems.append(f"pressing {what} changed nothing on screen{hint}")
+        where = "in the game area" if res.get("compared") == "the game canvas" else "on screen"
+        problems.append(f"pressing {what} changed nothing {where}{hint}")
     res = {"problems": problems or ["none found"], **res}
     res["note"] = ("Fix every problem, then try_page again. Only say it works when "
                    "problems is 'none found' and what_is_on_screen shows it working.")

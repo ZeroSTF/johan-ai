@@ -46,11 +46,26 @@ def main():
 
         page.goto(path.as_uri(), wait_until="load", timeout=15000)
         page.wait_for_timeout(SETTLE_MS)
-        a = page.screenshot()
+
+        # On a game the PLAY AREA is what must change. Comparing the whole
+        # page let a "Last key: ArrowRight" debug line pass a snake that
+        # never moved — Johan added the line while debugging and the check
+        # read the text change as the game working.
+        surface = page.locator("canvas")
+        use_canvas = surface.count() > 0
+        if use_canvas:
+            areas = page.evaluate("Array.from(document.querySelectorAll('canvas')).map(c => c.width * c.height)")
+            surface = surface.nth(max(range(len(areas)), key=areas.__getitem__))
+
+        def look():
+            return surface.screenshot() if use_canvas else page.screenshot()
+
+        a = look()
         page.wait_for_timeout(500)
-        b = page.screenshot()
+        b = look()
+        res["compared"] = "the game canvas" if use_canvas else "the whole page"
         res["moves_by_itself"] = a != b
-        (out / "load.png").write_bytes(b)
+        (out / "load.png").write_bytes(page.screenshot())
         res["text_on_load"] = page.inner_text("body")[:600]
 
         keys = [str(k) for k in (job.get("keys") or [])][:20]
@@ -74,8 +89,8 @@ def main():
                 res["errors"].append(f"key {k!r}: {e}"[:200])
             page.wait_for_timeout(KEY_GAP_MS)
         page.wait_for_timeout(AFTER_MS)
-        c = page.screenshot()
-        (out / "after.png").write_bytes(c)
+        c = look()
+        (out / "after.png").write_bytes(page.screenshot())
         res["keys_pressed"] = keys
         res["changed_after_keys"] = (b != c) if (keys or clicks) else None
         res["text_after"] = page.inner_text("body")[:600]
