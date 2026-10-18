@@ -356,6 +356,90 @@ def _reddit_text(markup, limit_comments=8):
     return "\n\n".join(parts) if parts else ""
 
 
+# --------------------------------------------------------------------------
+# try_page — open a page he asked Johan to make, and look at it
+# --------------------------------------------------------------------------
+# Asked "did you test it?", Johan said "I did verify it" after `ls` and a
+# read of the first 50 lines — and that snake game hit game-over on its very
+# first frame. Reading code is not running it. This runs it: headless
+# Chromium (render-only, file:// only, no network), JS errors, does it move,
+# do keys change it, and Johan's own eyes on the screenshot.
+TRY_DIR = PROJECT_ROOT / "brain/sandbox/try"
+TRY_KEEP = 10
+LOOK_PROMPT = (
+    "This is a screenshot of a web page or game that was just built for him, "
+    "taken after these keys/clicks: {keys}. Describe what is actually "
+    "on screen in 2-4 short sentences: what is drawn, any text, and anything "
+    "that looks wrong — overlapping or cut-off text, a blank or black area, "
+    "a 'game over' or error showing before anyone played, elements off "
+    "screen. Say only what you see.")
+
+
+def try_page(path, keys=None, click=None, look=True):
+    """Open a local HTML file in a headless browser and report what happens."""
+    target = Path(os.path.expanduser(str(path or ""))).resolve()
+    if Path.home().resolve() not in target.parents:
+        return {"error": "try_page opens files in /home/zeros only"}
+    if target.suffix.lower() not in (".html", ".htm"):
+        return {"error": "try_page opens .html files — for Python use run_python"}
+    if not target.is_file():
+        return {"error": f"no such file: {target}"}
+    if isinstance(keys, str):
+        keys = [k.strip() for k in re.split(r"[,\s]+", keys) if k.strip()]
+    python = PROJECT_ROOT / "venv-browser/bin/python"
+    out = TRY_DIR / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    if isinstance(click, str):
+        click = [c.strip() for c in click.split("|") if c.strip()]
+    job = json.dumps({"path": str(target), "keys": list(keys or []),
+                      "click": list(click or []), "out": str(out)})
+    try:
+        proc = subprocess.run(["taskset", "-c", "8-15", str(python),
+                               str(Path(__file__).with_name("try_page.py")), job],
+                              capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return {"error": "the page didn't finish loading in 60 s — an endless loop at load?"}
+    except OSError as e:
+        return {"error": f"browser unavailable: {e}"}
+    try:
+        res = json.loads((proc.stdout.strip().splitlines() or [""])[-1])
+    except ValueError:
+        return {"error": f"browser failed: {proc.stderr.strip()[-300:] or 'no output'}"}
+    if res.get("error"):
+        return res
+    runs = sorted(TRY_DIR.glob("*"), reverse=True)
+    for old in runs[TRY_KEEP:]:
+        shutil.rmtree(old, ignore_errors=True)
+    if look and res.get("screenshots"):
+        res["what_is_on_screen"] = _look_at(res["screenshots"][-1], (res.get("keys_pressed") or [])
+                                            + [f"click '{c}'" for c in res.get("clicked") or []])
+    res["text_on_load"] = res.get("text_on_load", "")[:300]
+    res["text_after"] = res.get("text_after", "")[:300]
+    # Problems in words, first. Given only booleans, the model read
+    # changed_after_keys=false and told him "the snake moved when I pressed
+    # the keys". The same list drives the check on its answer (johan_assistant).
+    problems = [f"JavaScript error: {e}" for e in (res.get("errors") or [])][:4]
+    problems += [f"console error: {e}" for e in (res.get("console_errors") or [])][:3]
+    if res.get("changed_after_keys") is False:
+        what = " / ".join((res.get("keys_pressed") or []) + [f"click {c}" for c in res.get("clicked") or []])
+        hint = (f" — maybe it needs a button first: {', '.join(res['buttons'][:4])} (use click=)"
+                if res.get("buttons") else "")
+        problems.append(f"pressing {what} changed nothing on screen{hint}")
+    res = {"problems": problems or ["none found"], **res}
+    res["note"] = ("Fix every problem, then try_page again. Only say it works when "
+                   "problems is 'none found' and what_is_on_screen shows it working.")
+    return res
+
+
+def _look_at(png, keys):
+    import johan_assistant as ja
+    try:
+        msg = ja.call_model([{"role": "user", "content": LOOK_PROMPT.format(
+            keys=", ".join(keys) or "none"), "image_paths": [png]}], no_tools=True)
+        return (msg.get("content") or "").strip()[:600] or "(no description)"
+    except Exception as e:      # noqa: BLE001 - the browser facts still stand
+        return f"(couldn't look at the screenshot: {type(e).__name__})"
+
+
 def fetch_page(url, max_chars=1800):
     """Read one page as plain text, hard-truncated. Use with a URL from
     web_search to read documentation, a forum thread, etc."""
@@ -1943,6 +2027,12 @@ TOOLS = [
         {"query": {"type": "string"}, "site": {"type": "string"}}, ["query"]),
     _fn("fetch_page", "Read a web page as text.",
         {"url": {"type": "string"}}, ["url"]),
+    _fn("try_page", "Open an HTML page/game you made in a real browser: errors, does it move, "
+        "do the keys work, and what is on screen. Use it before saying it works.",
+        {"path": {"type": "string"},
+         "keys": {"type": "string", "description": "keys to press, e.g. 'ArrowRight ArrowDown Space'"},
+         "click": {"type": "string", "description": "button texts to click in order, split by |"}},
+        ["path"]),
     _fn("latest_version", "Live latest version of a package; source='github' for owner/repo.",
         {"name": {"type": "string"},
          "source": {"type": "string", "enum": list(PACKAGE_REGISTRIES) + ["github"]}},
@@ -2078,7 +2168,7 @@ TOOLS.append(_actions.TOOL)
 
 DISPATCH = {
     "memory": memory_tool,
-    "web_search": web_search, "fetch_page": fetch_page,
+    "web_search": web_search, "fetch_page": fetch_page, "try_page": try_page,
     "latest_version": latest_version, "wikipedia": wikipedia,
     "current_datetime": current_datetime, "calculate": calculate,
     "system_status": system_status, "tasks": tasks,

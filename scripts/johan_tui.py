@@ -217,6 +217,7 @@ class SlashSuggester(SuggestFromList):
 VERBS = {
     "propose_action": "asking to change something", "propose_edit": "asking to edit a file",
     "web_search": "searching the web", "fetch_page": "reading a page",
+    "try_page": "trying it in a browser",
     "wikipedia": "checking Wikipedia", "latest_version": "checking versions",
     "run_command": "running a command",
     "system_status": "checking the machine", "project_files": "reading files", "files": "reading files",
@@ -638,6 +639,32 @@ class ImageCard(Vertical):
 
 
 SAVED_PICTURES = Path.home() / "Pictures/johan"     # `s` on a found picture
+
+
+class TryCard(Vertical):
+    """What try_page saw: the screenshot after the keys, and the verdict in
+    one line — so he sees the same thing Johan is judging."""
+
+    def __init__(self, result):
+        super().__init__(classes="trycard")
+        self.result = result
+
+    def compose(self) -> ComposeResult:
+        r = self.result
+        shots = r.get("screenshots") or []
+        img = _picture(shots[-1]) if shots else None
+        if img is not None:
+            img.styles.height = 14
+            img.styles.width = "auto"
+            yield img
+        errs = len(r.get("errors") or []) + len(r.get("console_errors") or [])
+        moves = "moves" if r.get("moves_by_itself") else "still"
+        keys = {True: " · keys changed it", False: " · keys changed nothing"}.get(
+            r.get("changed_after_keys"), "")
+        yield Static(mk(f"[$text-muted]tried in a browser · "
+                        + ("[$error]$e error(s)[/]" if errs else "no errors")
+                        + " · $m$k · ctrl+o opens it[/]", e=str(errs), m=moves, k=keys),
+                     classes="imagecap")
 
 
 class WebPicsCard(Vertical, can_focus=True):
@@ -2226,6 +2253,8 @@ class JohanApp(App):
             self.call_from_thread(setattr, self, "busy_label", tool_word(name))
             if name == "generate_image" and isinstance(result, dict) and result.get("path"):
                 self.call_from_thread(self._show_image, result)
+            if name == "try_page" and isinstance(result, dict) and result.get("screenshots"):
+                self.call_from_thread(self._show_try, result)
             if name == "find_images" and isinstance(result, dict) and result.get("pictures"):
                 self.call_from_thread(self._show_webpics, result)
             if name == "propose_action" and isinstance(result, dict) and result.get("auto_allowed"):
@@ -2271,6 +2300,11 @@ class JohanApp(App):
         if result.get("path") not in self.openables:
             self.openables.append(result["path"])
         self.query_one(ImagesPane).load()
+
+    def _show_try(self, result):
+        self._chat().add(TryCard(result))
+        if result.get("path") and result["path"] not in self.openables:
+            self.openables.append(result["path"])
 
     def _show_webpics(self, result):
         self._chat().add(WebPicsCard(result))

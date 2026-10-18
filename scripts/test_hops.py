@@ -50,8 +50,8 @@ results["never returns the 'unreachable' string"] = "unreachable" not in out
 results["answer is real text"] = bool(out.strip()) and "ran out of steps" in out
 results["final-hop tool calls are never executed"] = executed == [0, 1]
 results["final hop and its retry both sent without tools"] = [s["no_tools"] for s in sent] == [False, False, True, True]
-results["the retry carries the answer-now note"] = "No more tools" in sent[-1]["last_user"]
-results["the note is not kept in history"] = not any("No more tools" in (m.get("content") or "") for m in msgs)
+results["the retry carries the answer-now note"] = "No more tool calls" in sent[-1]["last_user"]
+results["the note is not kept in history"] = not any("No more tool calls" in (m.get("content") or "") for m in msgs)
 results["the code summary names what ran"] = "run_command" in out
 
 # 2. the retry answers properly -> that answer is used
@@ -69,6 +69,18 @@ results["empty final text is retried"] = out == "Done."
 # 4. the normal path is untouched: a text answer on hop 0 costs one call
 out, sent, executed, msgs = run(lambda n, no_tools: {"role": "assistant", "content": "hi"})
 results["normal answer: one call, no retry"] = (out, len(sent)) == ("hi", 1)
+
+# 5. a reply cut off at the length cap (a 10-minute runaway file write, once)
+#    is never run or shown: the model is told and tries again smaller
+def cut_then_ok(n, no_tools):
+    if n == 1:
+        return {**call("files"), "cut_off": True}
+    return {"role": "assistant", "content": "Wrote a smaller version."}
+out, sent, executed, msgs = run(cut_then_ok)
+results["a cut-off reply's tool call is not executed"] = executed == []
+results["…the model is told it was cut off"] = "limit and was cut off" in sent[1]["last_user"]
+results["…and the next try is the answer"] = out == "Wrote a smaller version."
+results["every chat call has a length cap"] = ja.NUM_PREDICT and ja.NUM_PREDICT <= 16000
 
 for k, ok in results.items():
     print(f"{'ok  ' if ok else 'FAIL'}  {k}")

@@ -131,6 +131,10 @@ Rules:
   find/ls/cat. E.g. asked to check his TF2 config:
   `find /home/zeros -maxdepth 7 -ipath *Team*Fortress*/tf/cfg -type d`.
   Never say a file or folder doesn't exist without checking.
+- Making a web page or game: write it with `files` (path + content), then
+  try_page it (keys a player would press, or click= the buttons to play it),
+  fix what it reports, and
+  try again. Never say it works, or that you tested it, without try_page.
 - Pictures he attaches are visible to you — look at them; to redraw one,
   generate_image with reference=<its path from the note>.
 - Installed software: `dpkg -l | grep -c ^ii` (apt count), `flatpak list --app`,
@@ -486,6 +490,16 @@ KEEP_ALIVE_ONESHOT = "5m"
 LAST_USAGE = {"prompt_tokens": 0, "completion_tokens": 0, "num_ctx": NUM_CTX}
 
 
+# A cap on one reply — there was none, so a model stuck repeating itself
+# could write until the 32K context filled (~10 min at ~45 tok/s) with
+# "thinking…" on screen. A whole HTML game written in one tool call measured
+# 4,658 tokens (108 s); 10,000 leaves room for twice that, ~4 min.
+NUM_PREDICT = 10000
+CUT_NOTE = ("[Johan, internal] Your last reply hit the {n}-token "
+            "limit and was cut off, so nothing in it ran. Make it shorter: a smaller "
+            "file, or write it in parts (one file, then add to it with propose_edit).")
+
+
 def call_model(messages, on_delta=None, no_tools=False, should_stop=None,
                tools=None):
     """One model call. Streams when `on_delta` is given.
@@ -503,7 +517,7 @@ def call_model(messages, on_delta=None, no_tools=False, should_stop=None,
         **({} if no_tools or tools == [] else {"tools": TOOLS if tools is None else tools}),
         "think": False, "stream": bool(on_delta),
         "keep_alive": KEEP_ALIVE,
-        "options": {"temperature": 0.3, "num_ctx": NUM_CTX},
+        "options": {"temperature": 0.3, "num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
     }
 
     # Both modes go through johan_interrupt: the HTTP wait runs in a helper
@@ -519,9 +533,12 @@ def call_model(messages, on_delta=None, no_tools=False, should_stop=None,
         LAST_USAGE.update(prompt_tokens=body.get("prompt_eval_count", 0),
                           completion_tokens=body.get("eval_count", 0),
                           num_ctx=NUM_CTX)
-        return body["message"]
+        out = body["message"]
+        if body.get("done_reason") == "length":
+            out["cut_off"] = True
+        return out
 
-    content, tool_calls, role = [], [], "assistant"
+    content, tool_calls, role, cut = [], [], "assistant", False
     try:
         with ji.stoppable(should_stop):
             for chunk in ji.ollama_lines(OLLAMA_CHAT, payload, idle_timeout=180):
@@ -536,6 +553,7 @@ def call_model(messages, on_delta=None, no_tools=False, should_stop=None,
                 if msg.get("tool_calls"):
                     tool_calls.extend(msg["tool_calls"])
                 if chunk.get("done"):
+                    cut = chunk.get("done_reason") == "length"
                     LAST_USAGE.update(
                         prompt_tokens=chunk.get("prompt_eval_count", 0),
                         completion_tokens=chunk.get("eval_count", 0),
@@ -546,6 +564,8 @@ def call_model(messages, on_delta=None, no_tools=False, should_stop=None,
     out = {"role": role, "content": "".join(content)}
     if tool_calls:
         out["tool_calls"] = tool_calls
+    if cut:
+        out["cut_off"] = True
     return out
 
 
@@ -829,6 +849,47 @@ def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
             return "(interrupted)"
 
 
+# "It works perfectly — the snake moved when I pressed the keys", right after
+# try_page reported the keys changed nothing. A 4B says what it expects, not
+# what the tool showed. Code compares the claim with the evidence and ADDS a
+# visible note; it never replaces the answer.
+_WORKS = re.compile(r"\b(works?|working|tested|functional|ready to play|good to go|"
+                    r"no (?:errors|problems|issues|glitches))\b", re.I)
+
+
+def _tool_results(messages, start):
+    out = []
+    for m in messages[start:]:
+        if m.get("role") == "tool":
+            try:
+                d = json.loads(m.get("content") or "")
+            except ValueError:
+                continue
+            if isinstance(d, dict):
+                out.append(d)
+    return out
+
+
+def _flag_untested(answer, messages, start):
+    if not answer or not _WORKS.search(answer):
+        return answer
+    res = _tool_results(messages, start)
+    page = lambda d: str(d.get("path", "")).lower().endswith((".html", ".htm"))   # noqa: E731
+    wrote = [i for i, d in enumerate(res) if (d.get("written") or d.get("applied")) and page(d)]
+    tried = [i for i, d in enumerate(res) if "problems" in d and "screenshots" in d]
+    note = None
+    if wrote and (not tried or tried[-1] < wrote[-1]):
+        note = "it wasn't opened in the browser after the last change, so this is untested"
+    elif tried and res[tried[-1]]["problems"] != ["none found"]:
+        note = "the browser test found: " + "; ".join(map(str, res[tried[-1]]["problems"][:2]))
+    if not note:
+        return answer
+    flagged = f"{answer}\n\n_(check: {note})_"
+    if messages and messages[-1].get("role") == "assistant":
+        messages[-1]["content"] = flagged
+    return flagged
+
+
 def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
     import johan_steps
     LAST_LEARNED[:] = []
@@ -867,6 +928,7 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
             execute=lambda c: execute_tool(c, seen, 0, q, should_stop))
         if asked:
             return _plan.render_ask(asked)
+    answer = _flag_untested(answer, messages, start)
     # Not on "make" turns (ideas, a plan, a text): the check demands every
     # line come from a tool result, so it cut his business ideas down to the
     # ones a blog listed and opened with "Here is the corrected breakdown".
@@ -914,7 +976,12 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
         # them. Only the first hop: if a later hop somehow gets here the
         # conversation is no longer trivial.
         quiet = last or (hop == 0 and _is_trivial(user_message, messages))
-        msg = call_model(messages, on_delta=on_delta, no_tools=quiet,
+        # The last hop runs with no tool schemas, and the model read that as
+        # "I have no tools": "I can't make a game — I don't have file writing
+        # tools… we'll have to wait until those tools are available again".
+        sent = messages + [{"role": "system", "content": LAST_HOP_NOTE}] if (
+            last and hop > 0) else messages
+        msg = call_model(sent, on_delta=on_delta, no_tools=quiet,
                          should_stop=should_stop, tools=tools)
         if msg.pop("interrupted", False):
             # Keep the partial text in history: the model should see what it
@@ -923,6 +990,11 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
             if msg.get("content"):
                 messages.append(msg)
             return msg.get("content", "") or "(interrupted)"
+        if msg.pop("cut_off", False) and not last:
+            # The cut text is half a file or half a tool call: never run or
+            # show it; say so and let the next hop try smaller.
+            messages.append({"role": "user", "content": CUT_NOTE.format(n=NUM_PREDICT)})
+            continue
         if last and (msg.get("tool_calls") or not (msg.get("content") or "").strip()):
             # Leaving `tools` out does NOT stop this model calling them:
             # Ollama's parser lifts tool calls out of the raw output either
@@ -1006,9 +1078,15 @@ def rewarm(messages):
     threading.Thread(target=go, daemon=True).start()
 
 
-FINAL_NUDGE = ("[note from Johan's runtime, not Riadh] No more tools are "
-               "available this turn. Answer him now in plain text from what the "
-               "tool results above show; say plainly what you couldn't finish.")
+FINAL_NUDGE = ("[note from Johan's runtime, not Riadh] No more tool calls in this "
+               "message — your tools are back in his next one. Answer him now in plain "
+               "text from what the tool results above show; say plainly what you "
+               "couldn't finish and that you can carry on.")
+
+
+LAST_HOP_NOTE = ("This is your last step for this message, so no more tool calls now: answer "
+                 "with what you found and what's still to do. You still have all your tools "
+                 "(files, run_command, try_page…) — he can say \"go on\" and you continue.")
 
 
 def _final_answer(messages, on_delta=None, should_stop=None):
