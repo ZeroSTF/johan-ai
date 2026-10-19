@@ -573,6 +573,16 @@ def call_model(messages, on_delta=None, no_tools=False, should_stop=None,
 EVAL_RUN = None
 
 
+def _args_for_log(args):
+    """Valid JSON, always: the column is jsonb, and cutting the dumped text
+    at 4,000 chars (a whole game file in `content`) made it invalid, so
+    every big file write silently failed to log."""
+    short = {k: (v[:1500] + "…" if isinstance(v, str) and len(v) > 1500 else v)
+             for k, v in (args or {}).items()}
+    text = json.dumps(short, default=str)
+    return text if len(text) <= 6000 else json.dumps({"_truncated": text[:5000]})
+
+
 def log_tool_call(session_id, user_message, hop, tool, args, ok, error,
                   duration_ms, result_chars):
     """Record one tool invocation.
@@ -590,7 +600,7 @@ def log_tool_call(session_id, user_message, hop, tool, args, ok, error,
                     error, duration_ms, result_chars, eval_run)
                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (session_id, MODEL, (user_message or "")[:2000], hop, tool,
-                 json.dumps(args or {})[:4000], ok, (error or None),
+                 _args_for_log(args), ok, (error or None),
                  duration_ms, result_chars, EVAL_RUN))
         conn.close()
     except Exception as e:      # noqa: BLE001 - telemetry must never raise

@@ -1858,7 +1858,18 @@ def read_file(path, start=1):
     res = {"path": str(p), "lines": len(lines), "from": start,
            "to": n - 1, "text": "\n".join(out)}
     if n <= len(lines):
-        res["more"] = f"files(path=..., start={n}) reads on"
+        # A 400-line manual was paged 8 times and given up on ("it's just
+        # repeating") with the answer on line 333. Show the later lines that
+        # match his question, and say searching inside finds things at once.
+        res["more"] = (f"lines {n}-{len(lines)} not shown: files(path=..., query='word') "
+                       f"finds a word in one step; start={n} reads on")
+        try:
+            import johan_reader as jr
+            rel = jr.relevant_lines("\n".join(lines), skip_first=n - 1)
+            if rel:
+                res["relevant_later_lines"] = rel
+        except Exception:      # noqa: BLE001 - the page itself still stands
+            pass
     res["note"] = ("numbers are not part of the file; text after │ is verbatim "
                    "(indentation included) — copy it exactly into propose_edit")
     return res
