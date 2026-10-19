@@ -22,6 +22,12 @@ import johan_actions as jx          # noqa: E402
 results = {}
 
 
+_SRC = Path.home() / ".cache/johan-test-src.py"      # a real file outside ~/johan
+_SRC.write_text("x = 1\n")
+import atexit                                        # noqa: E402
+atexit.register(lambda: _SRC.unlink(missing_ok=True))
+
+
 def refused(cmd, needle=""):
     """Refused for good — by the allowlist, or (for commands outside it,
     which now go to an approval card as written) by the never-list."""
@@ -112,12 +118,21 @@ def main():
             "dd if=/dev/zero of=/dev/sda": "never",
             "gsettings set org.gnome.desktop.interface gtk-theme 'Yaru-dark'": "not installed",
             "touch relative.txt": "absolute path",
-            f"mv {Path(__file__)} {Path(__file__)}": "already exists",
+            f"mv {Path(__file__)} {Path(__file__)}": "inside ~/johan",
+            # 2026-10-19: an approved raw command deleted almost all of ~/johan.
+            "rm -rf ~/johan/*": "johan",
+            "rm -rf /home/zeros/johan": "johan",
+            "cd ~ && rm -rf johan": "johan",
+            "find ~/johan -name '*.py' -delete": "johan",
+            f"mv {_SRC} ~/johan/": "inside ~/johan",
+            f"cp {_SRC} ~/johan/": "inside ~/johan",
+            "echo hi > /home/zeros/johan/notes.txt": "johan",
             "cp $(cat ~/.ssh/id_rsa) ~/x": "secrets",
         }
         for cmd, needle in attacks.items():
             results[f"refused: {cmd[:60]}"] = refused(cmd, needle)
-        for cmd in ("python3 -c 'import os'", "echo hi > ~/file", "pip install --user httpie"):
+        for cmd in ("python3 -c 'import os'", "echo hi > ~/file", "pip install --user httpie",
+                    "rm -rf ~/johan-test-game"):     # a folder merely STARTING with johan is not it
             results[f"not on the list, so he is asked: {cmd}"] = asks(cmd)
 
         # ---------------------------------------------------- must stage

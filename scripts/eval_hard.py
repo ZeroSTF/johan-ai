@@ -20,6 +20,7 @@ real engine and prompt; writes it makes to his records are reverted
 """
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -322,12 +323,33 @@ CASES = [
 ]
 
 
+_PATHS = re.compile(r"(?:~|\$HOME|/home/zeros|/tmp|/etc|/usr|/var|/opt|/root|\.\.)[^\s'\"`;|&)]*")
+
+
 def approver_for(w):
+    """Yes only when EVERY path in the change is inside the test folder.
+
+    The first version said yes when the folder's path merely APPEARED in the
+    command — on 2026-10-19 that let an approved command delete ~/johan.
+    No raw command that names a path outside w, no `cd`, no globs at home."""
+    home = str(Path.home())
+
     def decide(kind, item):
-        blob = json.dumps(item, default=str).replace("~/", str(Path.home()) + "/")
-        if str(w) in blob:
-            return {"choice": "yes", "reason": ""}
-        return {"choice": "no", "reason": f"(test) only changes inside {w} are allowed"}
+        if kind != "action":
+            target = os.path.realpath(os.path.expanduser(str(item.get("path", ""))))
+            ok = target.startswith(str(w) + "/")
+            return {"choice": "yes" if ok else "no",
+                    "reason": "" if ok else f"(test) only files inside {w}"}
+        for st in item.get("steps", []):
+            cmd = str(st.get("shown") or " ".join(map(str, st.get("argv") or [])))
+            text = cmd.replace("$HOME", home).replace("${HOME}", home)
+            text = re.sub(r"(?<![\w/])~(?=/|\s|$)", home, text)
+            paths = _PATHS.findall(text)
+            if not paths or re.search(r"(^|[;&|]\s*)cd\b|\*", text) or any(
+                    not os.path.realpath(p).startswith(str(w) + "/") and os.path.realpath(p) != str(w)
+                    for p in paths):
+                return {"choice": "no", "reason": f"(test) only commands whose every path is inside {w}"}
+        return {"choice": "yes", "reason": ""}
     return decide
 
 

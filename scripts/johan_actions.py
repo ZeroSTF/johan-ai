@@ -101,6 +101,9 @@ def _probe(argv, timeout=30):
 
 
 PROTECTED_DIRS = [ROOT / "brain", ROOT / "compose"]
+_DESTRUCTIVE = re.compile(r"(?<![\w-])(rm|rmdir|mv|shred|unlink|truncate|trash|dd)(?![\w-])|"
+                          r"-delete\b|--delete\b|git\s+(clean|reset|checkout\s+--)|"
+                          r"(?<![<>&\d])>(?!&)")
 
 # What earlier steps of the change being parsed will create/remove, so step 2
 # is judged against the disk AFTER step 1: `mkdir X && mv f X/f`, and every
@@ -155,6 +158,10 @@ def _path(arg, must_exist=None, what="path"):
         if p == d or d in p.parents:
             raise Refused(f"{arg} is Johan's own private data/config — not "
                           f"changed by actions")
+    if p == ROOT or ROOT in p.parents:
+        raise Refused(f"{arg} is inside ~/johan, Johan's own code — actions never "
+                      f"create, move or delete there; edit a file with files or "
+                      f"propose_edit (diff + backup)")
     exists = _exists(p)
     if must_exist is True and not exists:
         raise Refused(f"{arg} does not exist")
@@ -654,6 +661,15 @@ def _raw_step(text):
     for d in PROTECTED_DIRS:
         if str(d) in full:
             raise Refused(f"{d} is Johan's own data and is never changed by a command")
+    # 2026-10-19: an approved raw command deleted almost all of ~/johan — the
+    # check above only knew brain/ and compose/ by name, so `rm -rf ~/johan/*`
+    # passed. No raw command may touch the project folder at all, and nothing
+    # destructive may name it any way (`cd ~ && rm -rf johan`).
+    if re.search(rf"{re.escape(str(ROOT))}(?![\w.-])", full):
+        raise Refused("~/johan is Johan's own code and data — commands never change it; "
+                      "edit one file with files or propose_edit (diff + backup)")
+    if _DESTRUCTIVE.search(full) and re.search(r"(?<![\w.-])johan(?![\w-])", full):
+        raise Refused("a destructive command that names `johan` — never allowed")
     return {"argv": ["bash", "-c", t], "root": root, "timeout": RAW_TIMEOUT, "raw": True,
             "shown": ("sudo " if root else "") + t,
             "what": "run this command as written" + (" as root" if root else ""),

@@ -1506,8 +1506,9 @@ def _edit_path(path):
         repo = _git_root(real.parent)
         if repo is None:
             raise ValueError(f"refused: {path} is not inside ~/johan or a git "
-                             f"repository — edits are limited to version-"
-                             f"controlled code so every change can be reverted")
+                             f"repository, so propose_edit can't change it. To change "
+                             f"this file, rewrite it whole with files(path=..., "
+                             f"content=...) — never copy or move it elsewhere first")
         display = f"{repo.name}:{real.relative_to(repo)}"
     if not real.is_file():
         raise ValueError(f"no such file: {path}")
