@@ -9,7 +9,7 @@ is verified, and the model gets the real result in the same turn.
 
 `approver` is a ContextVar so it reaches tools that run in their own thread
 (johan_interrupt.run_stoppable copies the context). With no approver — the
-eval harness, one-shot `johan "…"`, Telegram (its polling loop can't wait
+eval harness, one-shot `johan "…"` (nobody can wait
 mid-turn) — `ask()` returns None and the change is staged as before.
 
 A decision is {"choice": "yes" | "always" | "no", "reason": str}.

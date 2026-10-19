@@ -1,6 +1,6 @@
 """Ask-with-options, plan-first and the live checklist — the engine side.
 
-Three features, one module, so the shared files (engine, TUI, Telegram) each
+Three features, one module, so the shared files (engine, TUI) each
 get only a few lines of glue:
 
   ASK        a tool, `ask(question, options)`, that ENDS the turn. The UIs show
@@ -93,7 +93,7 @@ def render_ask(res):
 def ended_by_ask(messages, start=0):
     """The asked-question result, if this turn (messages[start:]) ended on
     the ask tool; else None. Stateless: read back from the history, so it is
-    safe across the TUI worker and Telegram's loop."""
+    safe across TUI worker threads."""
     if not messages or messages[-1].get("role") != "assistant":
         return None
     last = messages[-1].get("content")

@@ -155,7 +155,7 @@ def main():
         results["quoted <Super> value is not mistaken for a redirect"] = refused(
             f"gsettings set org.gnome.shell.keybindings toggle-message-tray \"{kb}\"",
             "already")
-        st = staged("systemctl --user restart johan-telegram")
+        st = staged("systemctl --user restart johan-review")
         results["stages: user service restart, no root"] = bool(st and not st[0]["root"])
         st = staged("sudo docker stop johan-qdrant")
         results["sudo prefix tolerated, docker stop staged with undo=start"] = bool(
@@ -242,7 +242,7 @@ def main():
             {"prog": "pkill", "sub": "", "target": "firefox"},
             {"prog": "systemctl", "sub": "stop", "target": "ollama"},
             {"prog": "systemctl --user", "sub": "stop", "target": "pipewire"},
-            {"prog": "systemctl --user", "sub": "disable", "target": "johan-telegram"},
+            {"prog": "systemctl --user", "sub": "disable", "target": "johan-review"},
             {"prog": "docker", "sub": "pull", "target": "alpine"},
             {"prog": "mkdir", "sub": "in", "target": "/etc"},
             {"prog": "mkdir", "sub": "in", "target": f"{Path.home()}/../../etc"},
@@ -261,10 +261,10 @@ def main():
             results["a root step can never be a rule"] = False
         except jx.Refused:
             results["a root step can never be a rule"] = True
-        st = staged("systemctl --user restart johan-telegram")
+        st = staged("systemctl --user restart johan-review")
         st2 = staged(f"gsettings set org.gnome.desktop.interface color-scheme {other}")
         results["rules are program + subcommand + one target"] = (
-            st and jx._rule_of(st[0]) == ("systemctl --user", "restart", "johan-telegram")
+            st and jx._rule_of(st[0]) == ("systemctl --user", "restart", "johan-review")
             and st2 and jx._rule_of(st2[0]) == ("gsettings", "set",
                                                 "org.gnome.desktop.interface color-scheme"))
         jx.ALLOW_RULES.unlink()

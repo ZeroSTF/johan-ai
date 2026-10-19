@@ -19,7 +19,7 @@ Three gates, cheapest first, so a normal turn pays nothing:
                  and not a duplicate of a stored rule before saving.
 
 Runs AFTER the answer, so he sees the reply first. The rule is shown back to
-him (TUI toast / a Telegram line) with the id to undo it — a wrongly learned
+him (a TUI toast) with the id to undo it — a wrongly learned
 rule would otherwise steer every session silently.
 """
 

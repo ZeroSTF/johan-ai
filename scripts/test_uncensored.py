@@ -16,7 +16,6 @@ import johan_assistant as ja        # noqa: E402
 import johan_decide as jd           # noqa: E402
 import johan_interrupt as ji        # noqa: E402
 import johan_plan as jp             # noqa: E402
-import johan_telegram as tg         # noqa: E402
 import johan_tui as tui             # noqa: E402
 # His REAL pending changes must never surface in a test (a stray enter on a
 # waiting card could approve one): no 'waiting from earlier' cards here.
@@ -101,33 +100,9 @@ async def tui_checks():
         ja.use_model(ja.NORMAL_MODEL)
 
 
-def telegram_checks():
-    class FakeBot(tg.Bot):
-        def __init__(self):
-            super().__init__("fake", {1})
-            self.sent = []
-
-        def call(self, method, http_timeout=40, files=None, **params):
-            self.sent.append(params.get("text", ""))
-            return {"ok": True, "result": {"message_id": 1}}
-    real = ja.model_installed
-    ja.model_installed = lambda name: True
-    try:
-        bot = FakeBot()
-        tg.handle_update(bot, {"message": {"chat": {"id": 1}, "text": "/uncensored", "from": {}}})
-        check("telegram /uncensored switches", ja.is_uncensored())
-        tg.handle_update(bot, {"message": {"chat": {"id": 1}, "text": "/new", "from": {}}})
-        check("telegram /new starts normal", not ja.is_uncensored())
-        tg.handle_update(bot, {"message": {"chat": {"id": 9}, "text": "/uncensored", "from": {}}})
-        check("a stranger can't switch it", not ja.is_uncensored())
-    finally:
-        ja.model_installed = real
-        ja.use_model(ja.NORMAL_MODEL)
-
 
 engine_checks()
 asyncio.run(tui_checks())
-telegram_checks()
 for k, ok in results.items():
     print(f"{'ok  ' if ok else 'FAIL'}  {k}")
 bad = [k for k, ok in results.items() if not ok]

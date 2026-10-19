@@ -229,7 +229,7 @@ def look(im, query):
 # --------------------------------------------------------------- saving
 
 def _write(path, im):
-    """Atomic: a reader (the card, Telegram, /draw) never sees half a file."""
+    """Atomic: a reader (the card, /draw) never sees half a file."""
     im = im.copy()
     im.thumbnail((MAX_SIDE, MAX_SIDE))
     tmp = path.with_name(path.name + ".part")
@@ -286,7 +286,7 @@ def _start_full(path, x, im):
 
 def wait_full(paths, timeout=15):
     """Block until the originals of `paths` are in (or gave up), up to
-    `timeout` s in total. For senders that want full size (Telegram)."""
+    `timeout` s in total. For callers that want full size."""
     end = time.monotonic() + timeout
     for p in paths:
         ev = _FULL.get(str(p))

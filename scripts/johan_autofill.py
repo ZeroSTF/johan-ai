@@ -258,14 +258,13 @@ def autofill_application(job_id, dry_run=False):
     """Fill the application form for `job_id` in a visible browser window.
     Riadh reviews and clicks Submit himself. `dry_run` plans without opening
     a window (reads the form headlessly)."""
-    # The form opens in a window on the PC's screen. From Telegram (a service
-    # with no display) that would fail as a confusing "could not read the
-    # form" — or, worse, pop a window on an unattended screen. Say why.
+    # The form opens in a window on the PC's screen. With no display (a
+    # service, an ssh session) that would fail as a confusing "could not
+    # read the form". Say why.
     if not dry_run and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         return {"error": "autofill opens the application in a browser window on "
                          "the PC's screen, so it only works from Johan on the PC "
-                         "itself — not from the phone. The CV and link can be "
-                         "sent here instead (/cv <job id>)."}
+                         "itself, with a screen."}
     job = ja.get_job(int(job_id))
     if not isinstance(job, dict) or job.get("error"):
         return {"error": f"no job {job_id}"}

@@ -7,7 +7,7 @@ send time (`ollama_messages`). Sessions stay small, and old pictures drop
 out of what the model sees after a couple of turns so they stop costing
 context: a 1024 px picture is ~1,000 prompt tokens on every hop.
 
-Nothing here talks to the model; the TUI and Telegram call it.
+Nothing here talks to the model; the TUI calls it.
 """
 import base64
 import io

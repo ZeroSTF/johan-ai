@@ -22,7 +22,7 @@ If the embed server is down the lexical ranking alone is used.
 
 The question reaches the tool through a context variable that run_turn sets
 before dispatch: the tool schemas stay unchanged (no extra tokens on every
-chat) and concurrent turns (TUI + Telegram threads) cannot see each other's.
+chat) and concurrent turns (worker threads) cannot see each other's.
 """
 
 import contextvars

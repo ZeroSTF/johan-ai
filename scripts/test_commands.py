@@ -69,7 +69,7 @@ def unit(tmp):
     check("resolve: file command → expanded prompt",
           jc.resolve("/TLDR https://a.b", builtins=builtins, directory=tmp)
           == {"name": "tldr", "prompt": "Read https://a.b and give me a TL;DR."})
-    check("resolve: Telegram's /cmd@BotName form",
+    check("resolve: the /cmd@name form",
           jc.resolve("/tldr@johanbot u", builtins=builtins, directory=tmp)["prompt"]
           == "Read u and give me a TL;DR.")
     check("resolve: unknown → None", jc.resolve("/nosuch", directory=tmp) is None)

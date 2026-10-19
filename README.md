@@ -57,13 +57,13 @@ Type `/` and press **tab** to complete.
 | `/review` | Johan looks at its own recent mistakes and proposes fixes |
 | `/rules` | list "always allow" rules (`/rules forget N` removes one) |
 | `/forget <id>` | delete something Johan learned or remembered |
-| `/uncensored`, `/normal` | swap to an uncensored model for this chat, and back (same tools; a new chat starts normal) |
+| `/uncensored`, `/normal` | swap to an uncensored model for this chat, and back (same tools; a new chat keeps the current model) |
 | `/theme`, `/help` | |
 
 **Your own commands:** drop a markdown file in `commands/` and it becomes a
 command. `commands/tldr.md` → `/tldr <url>`. Write the prompt you'd normally
-type and put `$ARGS` where the argument goes. It works in the app and on
-Telegram without restarting. Comes with `/explain`, `/translate` (English ↔
+type and put `$ARGS` where the argument goes. It works in the app without
+restarting. Comes with `/explain`, `/translate` (English ↔
 French ↔ Arabic) and `/tldr`.
 
 ---
@@ -191,8 +191,7 @@ this one, `x` twice to delete.
 ### Pictures from the web
 
 "show me pictures of red pandas" → Johan searches, looks at each picture to
-drop the ones that don't match, and shows the rest with their sources (on
-Telegram, as an album). On a picture: `s` saves it to `~/Pictures/johan`,
+drop the ones that don't match, and shows the rest with their sources. On a picture: `s` saves it to `~/Pictures/johan`,
 `o` opens it, `w` opens its page, `r` attaches it to redraw from.
 
 ### Attach pictures
@@ -225,31 +224,12 @@ and builds a tailored CV for the best ones. **It never applies for me.**
 - Roles asking for far more experience than I have are filtered out; stretch
   roles are labelled.
 
-### Telegram
-
-The same assistant from my phone (only my account can use it):
-
-| | |
-|---|---|
-| just type | chat, with all the same tools |
-| `/jobs`, `/cv <id>`, `/applied <id>`, `/done` | the job queue |
-| `/draw [landscape] …` | draw; send a photo with a `/draw …` caption to redraw it |
-| `/remember`, `/memory`, `/forget <id>` | memory |
-| `/tasks`, `/task <text>`, `/finish <id>` | tasks |
-| `/uncensored`, `/normal` | swap models, same as in the app |
-| `/status`, `/refresh`, `/new`, `/help` | |
-
-Options come as buttons, and so do changes: **Run it / Always allow / No**,
-after which Johan carries on with the result. Changes that need the root
-password wait for the PC, where they show up in the chat.
-
----
 
 ## How it's built
 
 - **Model:** `qwen3.5:4b` through Ollama (tools and vision), a 32K context,
   and a separate small model for job-posting extraction.
-- **Interface:** Textual in the terminal, plus a Telegram bot.
+- **Interface:** Textual in the terminal.
 - **Data:** Postgres (jobs, memories, tasks, every tool call logged), Qdrant
   with bge-m3 embeddings on the CPU (memory, CV facts, skills).
 - **Images:** ComfyUI with SDXL models and a 4-step speed-up.

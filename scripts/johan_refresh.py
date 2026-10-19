@@ -1,7 +1,7 @@
 """johan_refresh — fetch new postings, close dead ones, re-check, rebuild.
 
 The one explicit way to refresh the job list: `/refresh` in the TUI or on
-Telegram, or `python johan_refresh.py`. Deliberately NOT a tool the chat
+or `python johan_refresh.py`. Deliberately NOT a tool the chat
 model can call (CLAUDE.md "Deliberately not exposed: Stage 1 or Stage 2"):
 it is ~20 minutes of network and GPU work, so only Riadh starts it. And not
 automatic either — he declined the login-time refresh (2026-10-07).

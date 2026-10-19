@@ -113,7 +113,7 @@ def resolve(text, builtins=(), directory=None):
     if not text.startswith("/"):
         return None
     head, _, rest = text[1:].partition(" ")
-    name = head.split("@")[0].lower()           # /tldr@BotName in Telegram groups
+    name = head.split("@")[0].lower()           # /tldr@name form tolerated
     cmd = load(directory, exclude=builtins).get(name)
     if not cmd:
         return None
