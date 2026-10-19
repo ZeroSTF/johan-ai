@@ -70,7 +70,17 @@ def main():
 
         keys = [str(k) for k in (job.get("keys") or [])][:20]
         clicks = [str(c) for c in (job.get("click") or [])][:10]
+        fills = [str(v) for v in (job.get("fill") or [])][:8]
         page.mouse.click(5, 5)            # focus the page, like clicking into it
+        res["filled"] = []
+        for i, value in enumerate(fills):
+            # Typed into the page's inputs in order — a calculator or a to-do
+            # list can't be tried without typing something first.
+            try:
+                page.locator("input, textarea").nth(i).fill(value, timeout=2000)
+                res["filled"].append(value)
+            except Exception:
+                res["errors"].append(f"couldn't type {value!r}: the page has no input #{i + 1}")
         res["clicked"] = []
         for label in clicks:
             # Buttons/links by their visible text — a text adventure is played
@@ -100,6 +110,16 @@ def main():
         except Exception:
             res["canvas"] = []
         res["title"] = page.title()
+        # His own checks, like try_code's asserts: JS expressions that must be
+        # true now, e.g. `snake[0].x > 10` or `document.body.innerText.includes('Score: 1')`.
+        res["checks"] = []
+        for expr in [c for c in (job.get("checks") or []) if c.strip()][:10]:
+            try:
+                ok = bool(page.evaluate(f"(() => ({expr}))()"))
+                res["checks"].append({"check": expr[:200], "passed": ok})
+            except Exception as e:
+                res["checks"].append({"check": expr[:200], "passed": False,
+                                      "error": str(e).splitlines()[0][:200]})
         try:
             res["buttons"] = page.evaluate(
                 "Array.from(document.querySelectorAll('button, [role=button], input[type=button]'))"

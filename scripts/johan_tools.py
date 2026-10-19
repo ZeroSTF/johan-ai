@@ -375,7 +375,7 @@ LOOK_PROMPT = (
     "screen. Say only what you see.")
 
 
-def try_page(path, keys=None, click=None, look=True):
+def try_page(path, keys=None, click=None, fill=None, check=None, look=True):
     """Open a local HTML file in a headless browser and report what happens."""
     target = Path(os.path.expanduser(str(path or ""))).resolve()
     if Path.home().resolve() not in target.parents:
@@ -390,8 +390,12 @@ def try_page(path, keys=None, click=None, look=True):
     out = TRY_DIR / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     if isinstance(click, str):
         click = [c.strip() for c in click.split("|") if c.strip()]
-    job = json.dumps({"path": str(target), "keys": list(keys or []),
-                      "click": list(click or []), "out": str(out)})
+    if isinstance(fill, str):
+        fill = [v.strip() for v in fill.split("|")]
+    checks = [c.strip() for c in str(check or "").splitlines() if c.strip()] \
+        if not isinstance(check, list) else check
+    job = json.dumps({"path": str(target), "keys": list(keys or []), "fill": list(fill or []),
+                      "click": list(click or []), "checks": checks, "out": str(out)})
     try:
         proc = subprocess.run(["taskset", "-c", "8-15", str(python),
                                str(Path(__file__).with_name("try_page.py")), job],
@@ -419,6 +423,10 @@ def try_page(path, keys=None, click=None, look=True):
     # the keys". The same list drives the check on its answer (johan_assistant).
     problems = [f"JavaScript error: {e}" for e in (res.get("errors") or [])][:4]
     problems += [f"console error: {e}" for e in (res.get("console_errors") or [])][:3]
+    for c in res.get("checks") or []:
+        if not c.get("passed"):
+            problems.append(f"your check failed: {c['check']}"
+                            + (f" ({c['error']})" if c.get("error") else " was false"))
     if res.get("changed_after_keys") is False:
         what = " / ".join((res.get("keys_pressed") or []) + [f"click {c}" for c in res.get("clicked") or []])
         hint = (f" — maybe it needs a button first: {', '.join(res['buttons'][:4])} (use click=)"
@@ -2089,7 +2097,10 @@ TOOLS = [
         "do the keys work, and what is on screen. Use it before saying it works.",
         {"path": {"type": "string"},
          "keys": {"type": "string", "description": "keys to press, e.g. 'ArrowRight ArrowDown Space'"},
-         "click": {"type": "string", "description": "button texts to click in order, split by |"}},
+         "click": {"type": "string", "description": "button texts to click in order, split by |"},
+         "fill": {"type": "string", "description": "values typed into the inputs in order, split by |"},
+         "check": {"type": "string", "description": "JS expressions, one per line, that must be "
+                   "true after the keys/clicks — test what he asked, e.g. snake[0].x > 10"}},
         ["path"]),
     _fn("try_code", "Run the Python you changed with a check (asserts testing what he asked "
         "for) in a sandbox. Use it after every code change, before saying it works.",

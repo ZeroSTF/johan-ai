@@ -37,13 +37,14 @@ CLICKY = """<!doctype html><html><body><p id=t>You are in a room.</p>
 TEXT_ONLY = """<!doctype html><html><body><p id=k>Last key:</p><canvas id=c width=200 height=200></canvas>
 <script>const ctx = document.getElementById('c').getContext('2d'); ctx.fillStyle = '#0f0'; ctx.fillRect(150, 90, 20, 20);
 document.addEventListener('keydown', e => document.getElementById('k').textContent = 'Last key: ' + e.key);</script></body></html>"""
+CALC = """<!doctype html><html><body><input id=b><input id=t><button onclick="o.textContent=(b.value*t.value/100)">Calculate</button><p id=o></p></body></html>"""
 STILL = """<!doctype html><html><body><h1>Snake</h1><p>Press any key</p></body></html>"""
 
 home_tmp = Path(tempfile.mkdtemp(prefix="johan-trypage-", dir=Path.home() / ".cache"))
 real_dir = jt.TRY_DIR
 jt.TRY_DIR = Path(tempfile.mkdtemp())
 try:
-    for name, html in (("good", GOOD), ("broken", BROKEN), ("still", STILL), ("clicky", CLICKY), ("textonly", TEXT_ONLY)):
+    for name, html in (("good", GOOD), ("broken", BROKEN), ("still", STILL), ("clicky", CLICKY), ("textonly", TEXT_ONLY), ("calc", CALC)):
         (home_tmp / f"{name}.html").write_text(html)
 
     r = jt.try_page(str(home_tmp / "good.html"), keys="ArrowRight ArrowRight", look=False)
@@ -70,6 +71,16 @@ try:
           and "You open the door." in r.get("text_after", ""))
     r = jt.try_page(str(home_tmp / "clicky.html"), click="Fly away", look=False)
     check("a button that isn't there is reported", any("Fly away" in e for e in r.get("errors", [])))
+
+    r = jt.try_page(str(home_tmp / "calc.html"), fill="50 | 20", click="Calculate",
+                    check="document.getElementById('o').textContent === '10'", look=False)
+    check("typing + clicking + his own check: a working calculator passes",
+          r.get("filled") == ["50", "20"] and r.get("problems") == ["none found"])
+    r = jt.try_page(str(home_tmp / "calc.html"), fill="50 | 20", click="Calculate",
+                    check="document.getElementById('o').textContent === '11'", look=False)
+    check("…a check that's false is a problem", any("your check failed" in p for p in r.get("problems", [])))
+    r = jt.try_page(str(home_tmp / "calc.html"), check="snake[0].x > 1", look=False)
+    check("…a check that errors says why", any("snake is not defined" in p for p in r.get("problems", [])))
 
     check("only files in his home", "home" in jt.try_page("/etc/hostname").get("error", ""))
     check("only .html files", ".html" in jt.try_page(str(Path(__file__))).get("error", ""))

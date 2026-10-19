@@ -132,8 +132,9 @@ Rules:
   `find /home/zeros -maxdepth 7 -ipath *Team*Fortress*/tf/cfg -type d`.
   Never say a file or folder doesn't exist without checking.
 - Making a web page or game: write it with `files` (path + content), then
-  try_page it (keys a player would press, or click= the buttons to play it),
-  fix what it reports, and
+  try_page it (keys a player would press, fill= what to type, click= the
+  buttons) with check= JS lines that must be true if it does what he asked
+  (e.g. the score went up, the result shows 10); fix what it reports, and
   try again. Never say it works, or that you tested it, without try_page.
 - Changing Python code: after the change, try_code(path, check) where check
   imports the file and asserts exactly what he asked for; fix until it passes.
