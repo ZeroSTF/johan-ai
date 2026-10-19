@@ -199,6 +199,23 @@ def _refused(cmd):
 
 
 main()
+
+# `cat > f << EOF … EOF` is how models write files. Through run_command OR
+# propose_action it must become a file edit (diff, backup, undo), never a raw
+# bash card. write_file is stubbed: nothing is staged or written.
+import johan_tools as _jt                      # noqa: E402
+_seen = []
+_real_wf = _jt.write_file
+_jt.write_file = lambda path, content, why="": _seen.append((path, content)) or {"proposed": True}
+try:
+    _hd = "cat > ~/x/game.html << 'EOF'\n<html>\n</html>\nEOF"
+    _jt.run_command_tool(_hd)
+    _jt.DISPATCH["propose_action"](commands=_hd, why="t")
+    results["heredoc via run_command becomes a file edit"] = bool(_seen) and _seen[0][1] == "<html>\n</html>\n"
+    results["heredoc via propose_action becomes a file edit"] = len(_seen) == 2
+finally:
+    _jt.write_file = _real_wf
+
 for k, ok in results.items():
     print(f"{'ok  ' if ok else 'FAIL'}  {k}")
 bad = [k for k, ok in results.items() if not ok]

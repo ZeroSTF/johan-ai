@@ -2190,5 +2190,10 @@ DISPATCH = {
     "run_command": run_command_tool, "scratchpad": scratchpad,
     "check_company_hiring": check_company_hiring,
     "run_python": _sandbox.run_python,
-    "propose_action": _actions.propose_action,
+    "propose_action": lambda commands=None, why="", **kw: (
+        # The same heredoc file write, sent as a "change" instead of a
+        # command: it ran raw (no diff, backup or undo) — make it an edit.
+        write_file(*_heredoc_write(commands), why=why or "")
+        if isinstance(commands, str) and _heredoc_write(commands)
+        else _actions.propose_action(commands, why=why, **kw)),
 }
