@@ -135,6 +135,9 @@ Rules:
   try_page it (keys a player would press, or click= the buttons to play it),
   fix what it reports, and
   try again. Never say it works, or that you tested it, without try_page.
+- Changing Python code: after the change, try_code(path, check) where check
+  imports the file and asserts exactly what he asked for; fix until it passes.
+  Never say code works without a passing try_code.
 - Pictures he attaches are visible to you — look at them; to redraw one,
   generate_image with reference=<its path from the note>.
 - Installed software: `dpkg -l | grep -c ^ii` (apt count), `flatpak list --app`,
@@ -863,7 +866,7 @@ def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
 # try_page reported the keys changed nothing. A 4B says what it expects, not
 # what the tool showed. Code compares the claim with the evidence and ADDS a
 # visible note; it never replaces the answer.
-_WORKS = re.compile(r"\b(works?|working|tested|functional|ready to play|good to go|"
+_WORKS = re.compile(r"\b(works?|working|tested|functional|ready to play|good to go|done|fixed|"
                     r"no (?:errors|problems|issues|glitches))\b", re.I)
 
 
@@ -884,14 +887,24 @@ def _flag_untested(answer, messages, start):
     if not answer or not _WORKS.search(answer):
         return answer
     res = _tool_results(messages, start)
-    page = lambda d: str(d.get("path", "")).lower().endswith((".html", ".htm"))   # noqa: E731
-    wrote = [i for i, d in enumerate(res) if (d.get("written") or d.get("applied")) and page(d)]
-    tried = [i for i, d in enumerate(res) if "problems" in d and "screenshots" in d]
     note = None
-    if wrote and (not tried or tried[-1] < wrote[-1]):
-        note = "it wasn't opened in the browser after the last change, so this is untested"
-    elif tried and res[tried[-1]]["problems"] != ["none found"]:
-        note = "the browser test found: " + "; ".join(map(str, res[tried[-1]]["problems"][:2]))
+    # Pages are judged by try_page, Python by try_code — the same rule.
+    for exts, is_try, untested, found in (
+            ((".html", ".htm"), lambda d: "screenshots" in d,
+             "it wasn't opened in the browser after the last change, so this is untested",
+             "the browser test found: "),
+            ((".py",), lambda d: d.get("tried_code"),
+             "the code wasn't run (try_code) after the last change, so this is untested",
+             "the code check found: ")):
+        kind = lambda d: str(d.get("path", "")).lower().endswith(exts)   # noqa: E731
+        wrote = [i for i, d in enumerate(res) if (d.get("written") or d.get("applied")) and kind(d)]
+        tried = [i for i, d in enumerate(res) if "problems" in d and is_try(d)]
+        if wrote and (not tried or tried[-1] < wrote[-1]):
+            note = untested
+        elif tried and res[tried[-1]]["problems"] != ["none found"]:
+            note = found + "; ".join(map(str, res[tried[-1]]["problems"][:2]))
+        if note:
+            break
     if not note:
         return answer
     flagged = f"{answer}\n\n_(check: {note})_"

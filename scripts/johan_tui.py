@@ -217,7 +217,7 @@ class SlashSuggester(SuggestFromList):
 VERBS = {
     "propose_action": "asking to change something", "propose_edit": "asking to edit a file",
     "web_search": "searching the web", "fetch_page": "reading a page",
-    "try_page": "trying it in a browser",
+    "try_page": "trying it in a browser", "try_code": "running the code",
     "wikipedia": "checking Wikipedia", "latest_version": "checking versions",
     "run_command": "running a command",
     "system_status": "checking the machine", "project_files": "reading files", "files": "reading files",

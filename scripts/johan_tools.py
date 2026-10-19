@@ -431,6 +431,52 @@ def try_page(path, keys=None, click=None, look=True):
     return res
 
 
+# --------------------------------------------------------------------------
+# try_code — run the Python he asked Johan to change, with a check
+# --------------------------------------------------------------------------
+# Every failed code edit in the hard eval ended "Done — remove_item now
+# raises ValueError…" and the hidden test said it didn't. try_page fixed the
+# same habit for pages: run it, read what happened, fix, run again. Same
+# sandbox as run_python (no network, read-only, his uid), with the edited
+# file's folder mounted at /work/in so the check can import it.
+TRY_CODE_MAX_FILES = 20
+
+
+def try_code(path, check):
+    """Run `check` (Python with asserts) against the .py files in `path`'s folder."""
+    target = Path(os.path.expanduser(str(path or ""))).resolve()
+    if Path.home().resolve() not in target.parents:
+        return {"error": "try_code runs files in /home/zeros only"}
+    folder = target if target.is_dir() else target.parent
+    if not folder.is_dir():
+        return {"error": f"no such folder: {folder}"}
+    if target.is_file() and target.suffix != ".py":
+        return {"error": "try_code is for Python files — web pages go to try_page"}
+    check = str(check or "")
+    if "assert" not in check:
+        return {"error": "write `check` as Python with assert lines that test exactly the "
+                         "behaviour he asked for (e.g. `from inventory import remove_item` "
+                         "then `assert ...`), so a pass means it really works"}
+    pys = sorted(p for p in folder.glob("*.py") if p.is_file())[:TRY_CODE_MAX_FILES]
+    data = sorted(p for p in folder.glob("*") if p.suffix in (".csv", ".json", ".txt")
+                  and p.is_file() and p.stat().st_size < 2_000_000)[:5]
+    code = ("import sys, os\nsys.path.insert(0, '/work/in')\nos.chdir('/work/in')\n"
+            + check + "\nprint('TRY_CODE_OK')")
+    res = _sandbox.run_python(code, files=[str(p) for p in pys + data], timeout=30)
+    if res.get("error"):
+        return res
+    passed = res.get("exit_code") == 0 and "TRY_CODE_OK" in (res.get("stdout") or "")
+    err = (res.get("stderr") or "").strip().splitlines()
+    problems = ["none found"] if passed else [
+        "the check FAILED: " + (" | ".join(err[-3:]) if err else f"exit code {res.get('exit_code')}")]
+    return {"problems": problems, "passed": passed, "tried_code": True, "path": str(target),
+            "stdout": (res.get("stdout") or "").replace("TRY_CODE_OK", "").strip()[-800:],
+            "files_loaded": [p.name for p in pys + data],
+            "note": ("Passed — the behaviour you checked works." if passed else
+                     "Fix the code (not the check), then try_code again. Don't say it works "
+                     "until this passes.")}
+
+
 def _look_at(png, keys):
     import johan_assistant as ja
     try:
@@ -2045,6 +2091,11 @@ TOOLS = [
          "keys": {"type": "string", "description": "keys to press, e.g. 'ArrowRight ArrowDown Space'"},
          "click": {"type": "string", "description": "button texts to click in order, split by |"}},
         ["path"]),
+    _fn("try_code", "Run the Python you changed with a check (asserts testing what he asked "
+        "for) in a sandbox. Use it after every code change, before saying it works.",
+        {"path": {"type": "string", "description": "the .py file you changed"},
+         "check": {"type": "string", "description": "Python: import from the file, then assert lines"}},
+        ["path", "check"]),
     _fn("latest_version", "Live latest version of a package; source='github' for owner/repo.",
         {"name": {"type": "string"},
          "source": {"type": "string", "enum": list(PACKAGE_REGISTRIES) + ["github"]}},
@@ -2181,6 +2232,7 @@ TOOLS.append(_actions.TOOL)
 DISPATCH = {
     "memory": memory_tool,
     "web_search": web_search, "fetch_page": fetch_page, "try_page": try_page,
+    "try_code": try_code,
     "latest_version": latest_version, "wikipedia": wikipedia,
     "current_datetime": current_datetime, "calculate": calculate,
     "system_status": system_status, "tasks": tasks,
