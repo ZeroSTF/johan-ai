@@ -90,14 +90,13 @@ def unit(tmp):
 
 
 class FakeOllama:
-    """Stands in for johan_interrupt.ollama_lines: records each payload,
-    answers 'ok' (streamed or not)."""
+    """Stands in for the model (fake_llm): records each request, answers 'ok'."""
     def __init__(self):
         self.payloads = []
 
-    def __call__(self, url, payload, idle_timeout=180):
+    def __call__(self, payload):
         self.payloads.append(payload)
-        yield {"message": {"role": "assistant", "content": "ok"}, "done": True}
+        return {"message": {"role": "assistant", "content": "ok"}}
 
 
 async def pilot(tmp):
@@ -124,7 +123,8 @@ async def pilot(tmp):
     stub(at, "clipboard_image", fake_clip_image)
     stub(at, "clipboard_text", lambda run=None: clipboard["text"])
     stub(at, "pick_file", lambda run=None: str(picked))
-    stub(ja.ji, "ollama_lines", fake)
+    import fake_llm
+    fake_llm.install(fake)
     stub(ja, "VERIFY_ANSWERS", False)
     stub(ja, "save_session", lambda m: None)
     stub(ja, "log_session", lambda m: None)
@@ -264,6 +264,7 @@ async def pilot(tmp):
     finally:
         for (obj, name), val in saved.items():
             setattr(obj, name, val)
+        fake_llm.uninstall()
 
 
 def real_model(tmp):

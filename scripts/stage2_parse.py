@@ -21,8 +21,10 @@ import psycopg2
 import psycopg2.extras
 import requests
 
-OLLAMA = "http://127.0.0.1:11434/api/chat"
-MODEL = "johan-extract"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import johan_llm  # noqa: E402
+
+MODEL = "granite"          # granite 4.1 3B on llama.cpp (was Ollama's johan-extract)
 
 # --------------------------------------------------------------------------
 # Location vocabulary
@@ -374,17 +376,10 @@ def parse_one(job, timeout=420):
             f"Company: {job['company']}\n"
             f"Location field: {job['location']}\n\n"
             f"Posting:\n{focus(job['raw_desc'])}")
-    r = requests.post(OLLAMA, json={
-        "model": MODEL,
-        "messages": [{"role": "system", "content": SYSTEM},
-                     {"role": "user", "content": user}],
-        "think": False,
-        "stream": False,
-        "format": SCHEMA,
-        "options": {"temperature": 0.0, "num_ctx": 8192, "seed": 42},
-    }, timeout=timeout)
-    r.raise_for_status()
-    return json.loads(r.json()["message"]["content"])
+    r = johan_llm.chat([{"role": "system", "content": SYSTEM},
+                        {"role": "user", "content": user}],
+                       model=MODEL, schema=SCHEMA, temperature=0.0, seed=42, timeout=timeout)
+    return json.loads(r["message"]["content"])
 
 
 def main():
@@ -463,9 +458,10 @@ def main():
                       f"{job['title'][:40]:40} {p['seniority']:10} "
                       f"{p['hiring_type']:10} {vbasis[:40]}", flush=True)
             except requests.ConnectionError:
-                # Ollama stopped — johan-pause / GameMode. Leave this row and
-                # the rest as 'new' so the next run resumes here.
-                print(f"\nOllama stopped at row {i}/{len(jobs)} — the rest stay "
+                # The model was stopped — johan-pause / GameMode (johan_llm.Paused
+                # is one). Leave this row and the rest as 'new' so the next run
+                # resumes here.
+                print(f"\nThe model stopped at row {i}/{len(jobs)} — the rest stay "
                       f"queued for the next run.", file=sys.stderr, flush=True)
                 conn.close()
                 sys.exit(3)

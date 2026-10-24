@@ -5,9 +5,10 @@ no DB writes, nothing written under ~/johan.
 """
 import json
 import os
-# These test the 4B (Ollama) path and the 4B-only crutches a smart model skips;
+# These test the 4B-only crutches a smart model skips (on the uncensored 4B);
 # config/default-model now says qwen36.
-os.environ["JOHAN_MODEL"] = "johan-agent"
+os.environ["JOHAN_MODEL"] = "qwen35u"
+os.environ["JOHAN_NO_MODEL_START"] = "1"
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -200,7 +201,7 @@ check("needs_plan: exactly one decision", len(asked), 2)
 
 # ------------------------------------------------------------------ plan call
 cfg = SimpleNamespace(TOOLS=[{"function": {"name": "run_command"}}], MODEL="m",
-                      OLLAMA_CHAT="x", KEEP_ALIVE="1m", NUM_CTX=1)
+                      NUM_CTX=1)
 plan_json = json.dumps({"steps": [{"do": "Check if docker is installed", "tool": "run_command"},
                                   {"do": "Stage the install", "tool": "propose_action"},
                                   {"do": "Tell him what to approve", "tool": "none"}]})

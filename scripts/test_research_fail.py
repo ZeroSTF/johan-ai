@@ -8,9 +8,10 @@ from memory." Both are pinned here.
     python test_research_fail.py
 """
 import os
-# These test the 4B (Ollama) path and the 4B-only crutches a smart model skips;
+# These test the 4B-only crutches a smart model skips (on the uncensored 4B);
 # config/default-model now says qwen36.
-os.environ["JOHAN_MODEL"] = "johan-agent"
+os.environ["JOHAN_MODEL"] = "qwen35u"
+os.environ["JOHAN_NO_MODEL_START"] = "1"
 import sys
 from pathlib import Path
 

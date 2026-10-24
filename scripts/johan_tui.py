@@ -1655,8 +1655,7 @@ class JohanApp(App):
                          tools=ja.TOOLS, max_tokens=1, timeout=900)
             self.call_from_thread(self._set_status, None)
             self.call_from_thread(self._refresh_sidebar)
-            # Ollama can finish the chat response just before /api/ps exposes
-            # the runner as loaded. Re-read it after the runner settles.
+            # The container reports itself a moment after it answers; re-read.
             self.call_from_thread(self.set_timer, 1.0, self._refresh_sidebar)
         except Exception as e:       # noqa: BLE001 - a worker error would close the app
             # The error text goes in as a $variable, never as markup:

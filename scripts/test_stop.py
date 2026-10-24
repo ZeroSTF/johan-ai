@@ -1,10 +1,10 @@
 """esc must actually stop a turn — within ~2 s, whatever it is waiting on.
 
-A fake Ollama server stalls every request for 30 s (like a long prompt read
+A fake llama-server stalls every request for 30 s (like a long prompt read
 or a slow decide/plan call). The real app runs against it through Textual's
 pilot: send a message, press esc, and the app must be idle again within
-2 s, and the fake server must see its connection closed — proof that Ollama
-would cancel the work rather than keep the GPU busy for nobody. Also covers
+2 s, and the fake server must see its connection closed — proof that the
+server would cancel the work rather than keep the GPU busy for nobody. Also covers
 a stalled NON-streaming call (the plan check's decide) and a stalled tool.
 No real model, no GPU, nothing written under brain/.
 
@@ -15,9 +15,10 @@ import json
 import select
 import socket
 import os
-# These test the 4B (Ollama) path and the 4B-only crutches a smart model skips;
+# These test the 4B-only crutches a smart model skips (on the uncensored 4B);
 # config/default-model now says qwen36.
-os.environ["JOHAN_MODEL"] = "johan-agent"
+os.environ["JOHAN_MODEL"] = "qwen35u"
+os.environ["JOHAN_NO_MODEL_START"] = "1"
 import sys
 import threading
 import time
@@ -76,14 +77,15 @@ def check(label, ok):
 async def main():
     srv = ThreadingHTTPServer(("127.0.0.1", 0), SlowOllama)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{srv.server_address[1]}/api/chat"
+    url = f"http://127.0.0.1:{srv.server_address[1]}/v1/chat/completions"
 
     saved = {}
 
     def stub(obj, name, val):
         saved[(obj, name)] = getattr(obj, name)
         setattr(obj, name, val)
-    stub(ja, "OLLAMA_CHAT", url)
+    stub(ja._llm, "chat_url", lambda: url)
+    stub(ja._llm, "ensure", lambda *a, **k: True)
     stub(ja, "save_session", lambda m: None)          # never touch brain/
     stub(ja, "log_session", lambda m: None)
     stub(ja, "prime_with_memories", lambda s, **k: s)
@@ -119,7 +121,7 @@ async def main():
                       f"({'never' if idle_at is None else f'{idle_at:.2f}s'})",
                       idle_at is not None and idle_at <= 2.0)
                 await asyncio.sleep(0.3)
-                check(f"{label}: the connection was closed (Ollama would cancel)",
+                check(f"{label}: the connection was closed (the server would cancel)",
                       len(events["closed"]) > closed_before)
                 await app.workers.wait_for_complete()
 

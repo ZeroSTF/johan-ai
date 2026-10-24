@@ -6,7 +6,7 @@ LoRA and the fp16-fixed SDXL VAE.
 
 The GPU cannot hold the chat model (~4.7 GB) and an SDXL UNet (~5.1 GB fp16)
 at once, so every generation is a handoff:
-  1. unload the chat model from Ollama (keep_alive 0)
+  1. stop the chat model's llama.cpp container
   2. start ComfyUI if it isn't running (pinned to cores 8-15, like every
      background job here, so a game keeps cores 0-3)
   3. generate
@@ -341,7 +341,7 @@ def _release_chat_model():
         ja.release_model()
     except Exception:
         pass
-    time.sleep(1.0)            # Ollama returns before CUDA memory is actually freed
+    time.sleep(1.0)            # the driver frees CUDA memory a moment after the stop
 
 
 def start_server(timeout=120):

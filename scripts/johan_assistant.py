@@ -1,4 +1,4 @@
-"""johan_assistant.py — chat front-end for johan-agent with tool access to
+"""johan_assistant.py — chat front-end for Johan's model with tool access to
 the job pipeline. This is the "front door" the rest of the project has been
 missing: everything before this was a script you ran, not an assistant you
 talked to.
@@ -14,10 +14,8 @@ Design constraints, deliberate:
     same principle as "never let the model's interpretation create a
     positive signal," applied to actions instead of eligibility verdicts.
     Run those by hand when you actually mean to.
-  - No persistent daemon: this is invoked per-session. Ollama's own
-    OLLAMA_KEEP_ALIVE=30s means the model unloads shortly after you're done,
-    same as every other script here — johan-pause/GameMode still works
-    exactly as before.
+  - No persistent daemon: this is invoked per-session; quitting unloads the
+    model (johan_llm.stop) and johan-pause/GameMode stops it outright.
 
 This module is the ENGINE: tool definitions, the tool-call loop (`run_turn`),
 session persistence and memory priming. The user-facing interface is
@@ -62,16 +60,14 @@ MAX_TOOL_CHARS = 2400
 # relevance; the backstop must not then chop that selection in half.
 TOOL_CHAR_CAPS = {"fetch_page": 4000}
 
-OLLAMA_CHAT = _llm.OLLAMA_CHAT     # only the 4B; every call goes through _llm.chat
 # JOHAN_MODEL lets the evals score another model through the same code path.
 def _default_model():
-    """JOHAN_MODEL, else config/default-model (one line), else the 4B. The
-    file is the one switch between the Ollama 4B and a llama.cpp model."""
+    """JOHAN_MODEL, else config/default-model (one line), else the 35B."""
     try:
         name = (Path.home() / "johan/config/default-model").read_text().strip()
     except OSError:
         name = ""
-    return os.environ.get("JOHAN_MODEL") or name or "johan-agent"
+    return _llm.name_of(os.environ.get("JOHAN_MODEL") or name or "qwen36")
 
 
 MODEL = _default_model()
@@ -81,7 +77,7 @@ NORMAL_MODEL = MODEL
 # MAX_LOADED_MODELS=1, alternating models per call would reload one every few
 # seconds. Every code-level guard (shell allowlist, change approval, sandbox,
 # image refusals) is independent of the model and stays on.
-UNCENSORED_MODEL = os.environ.get("JOHAN_UNCENSORED_MODEL", "johan-uncensored")
+UNCENSORED_MODEL = _llm.name_of(os.environ.get("JOHAN_UNCENSORED_MODEL", "qwen35u"))
 
 
 def use_model(name):
@@ -95,14 +91,9 @@ def is_uncensored():
 
 
 def model_installed(name):
-    if _llm.is_llm(name):
-        return _llm.installed(name)
-    try:
-        tags = requests.get("http://127.0.0.1:11434/api/tags", timeout=5).json()
-        return any(m.get("name", "").split(":")[0] == name.split(":")[0]
-                   for m in tags.get("models", []))
-    except requests.RequestException:
-        return False
+    return _llm.installed(name)
+
+
 EMBED_URL = "http://127.0.0.1:8100/embed"
 QDRANT_HOST, QDRANT_PORT = "127.0.0.1", 6333
 SESSION_LOG_DIR = ROOT / "brain/inbox"
@@ -484,7 +475,7 @@ DISPATCH["ask"] = _plan.ask
 # Chat loop
 # --------------------------------------------------------------------------
 
-# Real context usage, reported by Ollama itself (prompt_eval_count) rather
+# Real context usage, reported by the server itself (prompt tokens) rather
 # than estimated from character counts. The UI shows it because a long
 # conversation can quietly approach num_ctx, and the failure mode is silent:
 # the oldest messages get evicted and the assistant starts contradicting what
@@ -497,17 +488,6 @@ DISPATCH["ask"] = _plan.ask
 # compositor shares this GPU and can take ~1.2 GB with a busy browser.
 NUM_CTX = 32768
 
-# How long Ollama keeps the model in VRAM after a request. The systemd unit
-# sets OLLAMA_KEEP_ALIVE=30s, which is why the first prompt after a pause
-# costs ~7s of load_duration to page 3.3 GB back into VRAM while later
-# prompts answer in ~0.3s. Overriding it per-request avoids needing sudo to
-# edit the unit, and it is safe because johan-pause/GameMode stops Ollama
-# outright when a game starts — so nothing squats VRAM while gaming.
-KEEP_ALIVE = "20m"
-# A one-shot `johan "question"` has no session to keep warm for, so it holds
-# the model for a short window (enough for a couple of follow-up questions)
-# instead of the full interactive value.
-KEEP_ALIVE_ONESHOT = "5m"
 LAST_USAGE = {"prompt_tokens": 0, "completion_tokens": 0, "num_ctx": NUM_CTX}
 
 
@@ -1242,21 +1222,9 @@ def load_session(session_id=None):
 
 
 def release_model(model=None):
-    """Unload the model from VRAM now (keep_alive: 0).
-
-    KEEP_ALIVE keeps it resident for fast follow-up prompts, which would
-    otherwise mean 3.3 GB squatting in VRAM for 20 minutes after you quit.
-    Called on every exit path so "closed Johan" means "VRAM is free"."""
-    model = model or MODEL
-    if _llm.is_llm(model):
-        return _llm.stop()            # llama.cpp has no unload: stop its container
-    try:
-        response = requests.post(OLLAMA_CHAT, timeout=20, json={
-            "model": model, "messages": [], "keep_alive": 0})
-        response.raise_for_status()
-        return True
-    except requests.RequestException:
-        return False
+    """Unload the model now: stops the llama.cpp container, freeing VRAM and
+    RAM. Called on every exit path so "closed Johan" means "VRAM is free"."""
+    return _llm.stop()
 
 
 def delete_session(session_id):
@@ -1478,8 +1446,6 @@ def main():
               "for a one-shot answer.", file=sys.stderr)
         return 1
 
-    global KEEP_ALIVE
-    KEEP_ALIVE = KEEP_ALIVE_ONESHOT
     messages.append({"role": "user", "content": args.once})
     print(run_turn(messages))
     log_session(messages)

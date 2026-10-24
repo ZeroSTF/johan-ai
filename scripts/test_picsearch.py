@@ -285,20 +285,23 @@ def main():
         import johan_interrupt as ji
         sent = []
 
-        def fake_post(url, payload, timeout=180):
+        def fake_post(payload):
             sent.append(payload)
             grey = payload["messages"][-1].get("images") == [jd._grey_b64()]
             lean = -0.7 if grey else -0.05          # the grey picture: no real lean
             return {"logprobs": [{"top_logprobs": [{"token": "A", "logprob": lean},
                                                    {"token": "B", "logprob": -0.7 if grey else -3.0}]}]}
-        real_jd = (ji.ollama_post, jd._prior_path, dict(jd._PRIORS), jd._log)
-        ji.ollama_post, jd._prior_path = fake_post, (lambda: tmp / "priors.json")
+        import fake_llm
+        real_jd = (None, jd._prior_path, dict(jd._PRIORS), jd._log)
+        fake_llm.install(fake_post)
+        jd._prior_path = lambda: tmp / "priors.json"
         jd._PRIORS.clear()
         jd._log = lambda *a, **k: None
         try:
             p, sure = saved["look"](Image.open(io.BytesIO(FILES["a.jpg"][1])), "red panda")
         finally:
-            ji.ollama_post, jd._prior_path, _, jd._log = real_jd
+            fake_llm.uninstall()
+            _, jd._prior_path, _, jd._log = real_jd
             jd._PRIORS.clear()
             jd._PRIORS.update(real_jd[2])
         user = sent[0]["messages"][-1] if sent else {}

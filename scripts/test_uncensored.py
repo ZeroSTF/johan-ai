@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import fake_llm                     # noqa: E402  (first: no real model in this test)
 import johan_assistant as ja        # noqa: E402
 import johan_decide as jd           # noqa: E402
 import johan_interrupt as ji        # noqa: E402
@@ -31,12 +32,11 @@ def check(label, ok):
 def engine_checks():
     seen = []
 
-    def fake_post(url, payload, timeout=180):
+    def fake_post(payload):
         seen.append(payload["model"])
         return {"message": {"role": "assistant", "content": '{"steps": []}'},
                 "logprobs": [{"top_logprobs": [{"token": "A", "logprob": -0.1}]}]}
-    real = ji.ollama_post
-    ji.ollama_post = fake_post
+    fake_llm.install(fake_post)
     try:
         ja.use_model(ja.UNCENSORED_MODEL)
         ja.call_model([{"role": "user", "content": "x"}])
@@ -52,7 +52,7 @@ def engine_checks():
         ja.call_model([{"role": "user", "content": "x"}])
         check("/normal puts every call back on the normal model", seen == [ja.NORMAL_MODEL])
     finally:
-        ji.ollama_post = real
+        fake_llm.uninstall()
         ja.use_model(ja.NORMAL_MODEL)
 
 

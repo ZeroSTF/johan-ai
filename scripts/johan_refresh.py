@@ -16,7 +16,7 @@ Steps, each a subprocess pinned to cores 8-15 (games keep 0-3):
                           proves nothing; a posting unseen for AGG_DAYS is
                           treated as closed.
   4. stage2_parse.py    — eligibility check on every new posting (GPU).
-                          If Ollama stops mid-run (GameMode), the rest stay
+                          If the model stops mid-run (GameMode), the rest stay
                           'new' and the next /refresh resumes there.
   5. apply queue        — rebuilt from open jobs only, CVs regenerated.
 
@@ -35,7 +35,6 @@ from datetime import datetime
 from pathlib import Path
 
 import psycopg2
-import requests
 
 ROOT = Path.home() / "johan"
 SCRIPTS = ROOT / "scripts"
@@ -62,49 +61,14 @@ def _counts(cur):
     return dict(zip(("open", "closed", "unchecked", "likely"), cur.fetchone()))
 
 
-def _ollama_up():
-    try:
-        return requests.get("http://127.0.0.1:11434/api/version", timeout=3).ok
-    except requests.RequestException:
-        return False
-
-
-def _running():
-    try:
-        pid = int(LOCK.read_text())
-        os.kill(pid, 0)
-        return pid
-    except (OSError, ValueError):
-        return None
-
-
-def status():
-    """Last run's summary (for the UI's home card), or None."""
-    try:
-        return json.loads(STATUS.read_text())
-    except (OSError, ValueError):
-        return None
-
-
-def _run(script, args, log, on_line):
-    """Run one pipeline script; feed each output line to on_line. Returns rc."""
-    proc = subprocess.Popen(
-        ["taskset", "-c", "8-15", "nice", "-n", "10", str(PY), "-u", script, *args],
-        cwd=str(SCRIPTS), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    for line in proc.stdout:
-        log.write(line)
-        log.flush()
-        on_line(line.rstrip())
-    return proc.wait()
-
-
 def refresh(on_progress=None):
     """Run the whole refresh. Returns a summary dict ({"error": ...} on failure)."""
     say = on_progress or (lambda m: None)
     other = _running()
     if other:
         return {"error": f"a refresh is already running (pid {other})"}
-    if not _ollama_up():
+    import johan_llm
+    if johan_llm.PAUSE_FILE.exists():
         return {"error": "the AI is stopped (GameMode / johan-pause) — the eligibility "
                          "check needs it. Run /refresh again after your game."}
     LOCK.parent.mkdir(parents=True, exist_ok=True)
@@ -144,17 +108,11 @@ def refresh(on_progress=None):
                 m = re.match(r"\s*(\d+)/(\d+)", line)
                 if m:
                     say(f"checking eligibility · {m.group(1)}/{m.group(2)}")
-            # Stage 2 runs granite in Ollama; a llama.cpp chat model holds the
-            # card, so stop it first (Johan starts it again on his next message).
-            try:
-                import johan_llm
-                if johan_llm.status().get("served"):
-                    say("unloading the chat model for the eligibility check")
-                    johan_llm.stop()
-            except Exception:
-                pass
+            # Stage 2's model takes the card from the chat model (one at a
+            # time); Johan starts the chat model again on his next message.
             rc = _run("stage2_parse.py", ["--limit", "100000", "--status", "new"], log, parse)
             paused = rc == 3
+            johan_llm.stop()
 
             queue = None
             if not paused:

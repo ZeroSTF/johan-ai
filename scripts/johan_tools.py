@@ -682,11 +682,7 @@ def system_status():
     except Exception as e:
         out["gpu"] = {"error": str(e)}
 
-    try:
-        models = requests.get("http://127.0.0.1:11434/api/ps", timeout=5).json()
-        out["models_loaded"] = [m.get("name") for m in models.get("models", [])]
-    except Exception:
-        out["models_loaded"] = []
+    out["models_loaded"] = []
     try:
         import johan_llm
         st = johan_llm.status()

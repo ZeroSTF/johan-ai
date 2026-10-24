@@ -1,24 +1,25 @@
-"""Models served by llama.cpp instead of Ollama, and their lifecycle.
+"""Every model Johan runs, served by llama.cpp, and their lifecycle.
 
-Why: Qwen3.6-35B-A3B (a mixture of experts) is fast on this 6 GB card only
-with llama.cpp's --n-cpu-moe, which keeps most experts in RAM; Ollama can't do
-that. Measured 2026-10-23 with Johan's real prompt: new chat 1.1 s, writing
-28 tok/s, reading ~78 tok/s, 4.5 GB VRAM at n_cpu_moe=34; and on the hard
-eval's deciding cases 7/8 where the 4B averages ~3.7/8.
+Why llama.cpp: Qwen3.6-35B-A3B (a mixture of experts) is fast on this 6 GB card
+only with --n-cpu-moe, which keeps most experts in RAM. Measured 2026-10-23 with
+Johan's real prompt: new chat 1.1 s, writing 28 tok/s, reading ~78 tok/s, 4.5 GB
+VRAM at n_cpu_moe=34; on the hard eval's deciding cases 7/8 where the 4B averaged
+~3.7/8. Ollama was retired 2026-10-24: the two small models it still served (the
+job filter's granite and the uncensored 4B) are plain GGUF files here now.
 
-The rest of Johan still speaks Ollama's /api/chat dialect. The translation
-lives at the one HTTP choke point every model call already goes through
-(johan_interrupt.ollama_lines), so chat, decide, plan, learn and build need no
-changes, and esc still cancels mid-request. A model is a llama.cpp model when
-its name is in MODELS; anything else goes to Ollama as before.
+The rest of Johan builds requests in Ollama's /api/chat dialect (messages with
+`images`, tool calls paired by order, `format` for a JSON schema). chat() is the
+one place that turns them into llama-server's OpenAI requests and back, so chat,
+decide, plan, learn and build need no knowledge of the server.
 
-Lifecycle, which Ollama used to do for us:
+Lifecycle — one container, one model at a time (one 6 GB card):
   start()   docker run the CUDA build (Ubuntu 24.04 container — the release
-            needs glibc 2.38, Pop!_OS 22.04 has 2.35); waits for /health
+            needs glibc 2.38, Pop!_OS 22.04 has 2.35); waits for /health.
+            Starting another model replaces the one being served.
   stop()    docker stop: frees the GPU and RAM — on quit, before drawing,
-            before /refresh's Stage 2 (granite still runs in Ollama), and in
-            johan-pause (GameMode)
-  ensure()  start if not running — a call to a stopped model starts it
+            and in johan-pause (GameMode)
+  ensure()  start if not running — a call to a stopped model starts it,
+            except while johan-pause holds PAUSE_FILE (a game is running)
 """
 import json
 import os
@@ -41,7 +42,25 @@ MODELS = {
     # for the desktop and a browser — too tight. 26 didn't fit at all.
     "qwen36": {"gguf": "Qwen3.6-35B-A3B-APEX-I-Mini.gguf", "mmproj": "mmproj.gguf",
                "n_cpu_moe": 34, "smart": True},
+    # Stage 2's fact extractor (granite 4.1 3B, was Ollama's johan-extract):
+    # small and dense, all on the GPU; postings are cut to fit 8K.
+    "granite": {"gguf": "granite-4.1-3b.gguf", "ctx": 8192},
+    # /uncensored: HauhauCS Qwen3.5-4B "Aggressive" (was Ollama's johan-uncensored).
+    # The uncensored 35B was tried 2026-10-24 and dropped: ~40% slower here.
+    "qwen35u": {"gguf": "Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+                "mmproj": "mmproj-qwen3.5-4b-uncensored.gguf"},
 }
+# Old Ollama names still found in configs, sessions and environment variables.
+ALIASES = {"johan-extract": "granite", "johan-uncensored": "qwen35u"}
+
+# johan-pause (GameMode) creates this and johan-resume removes it: while it
+# exists nothing may start a model, or the next chat or /refresh step would
+# load ~5 GB onto the GPU in the middle of a game.
+PAUSE_FILE = Path.home() / ".cache/johan-paused"
+
+
+class Paused(requests.ConnectionError):
+    """A model was needed while Johan is paused for a game."""
 
 
 def smart(model=None):
@@ -51,15 +70,20 @@ def smart(model=None):
     if model is None:
         import johan_assistant as ja
         model = ja.MODEL
-    return bool(MODELS.get(str(model).split(":")[0], {}).get("smart"))
+    return bool(MODELS.get(name_of(model), {}).get("smart"))
+
+
+def name_of(model):
+    n = str(model or "").split(":")[0]
+    return ALIASES.get(n, n)
 
 
 def is_llm(model):
-    return str(model or "").split(":")[0] in MODELS
+    return name_of(model) in MODELS
 
 
 def installed(model):
-    m = MODELS.get(str(model).split(":")[0])
+    m = MODELS.get(name_of(model))
     return bool(m) and (LLAMA / "models" / m["gguf"]).is_file()
 
 
@@ -112,8 +136,12 @@ def _wait_healthy(name, wait, should_stop):
 
 
 def _start(model, wait, should_stop):
-    name = str(model).split(":")[0]
+    name = name_of(model)
     m = MODELS[name]
+    if PAUSE_FILE.exists():
+        raise Paused("Johan is paused (johan-pause / GameMode) — run johan-resume")
+    if os.environ.get("JOHAN_NO_MODEL_START"):      # offline tests (fake_llm.py)
+        raise RuntimeError(f"a test tried to start the real model ({name})")
     served = _served()
     if served == name:
         return _wait_healthy(name, wait, should_stop)     # up, or still loading
@@ -134,7 +162,10 @@ def _start(model, wait, should_stop):
            "-e", "LD_LIBRARY_PATH=/llama:/nv/cuda_runtime/lib:/nv/cublas/lib",
            "-e", "CUDA_CACHE_PATH=/cache", "-e", "CUDA_CACHE_MAXSIZE=2147483648",
            "ubuntu:24.04", "/llama/llama-server", "-m", f"/models/{m['gguf']}",
-           "-ngl", "99", "--n-cpu-moe", str(m["n_cpu_moe"]), "-c", "32768",
+           "-ngl", "99", "-c", str(m.get("ctx", 32768)),
+           # One slot: two (sharing the cache) lost the warmed prompt and ran
+           # OpenCode's title request in parallel — 2.5 min to answer "hi".
+           # OpenCode's title request is switched off in its config instead.
            "-fa", "on", "-ctk", "q8_0", "-ctv", "q8_0", "--jinja", "-t", "8", "-np", "1",
            # The prompt cache lives in RAM, 8 GB by default — a long build
            # filled it and the PC ran out of memory. 2 GB keeps new chats fast.
@@ -143,6 +174,8 @@ def _start(model, wait, should_stop):
            # agents like OpenCode don't): at ~28 tok/s it doubles a reply.
            "--chat-template-kwargs", '{"enable_thinking": false}',
            "--host", "127.0.0.1", "--port", str(PORT)]
+    if m.get("n_cpu_moe"):
+        cmd[-4:-4] = ["--n-cpu-moe", str(m["n_cpu_moe"])]
     if m.get("mmproj") and (LLAMA / "models" / m["mmproj"]).is_file():
         # Vision on the CPU: on a GTX 16 the projector's GPU compute buffer
         # doesn't fit beside the model (measured with Bonsai, 2026-10-19).
@@ -158,6 +191,12 @@ def stop():
     """Unload: frees VRAM and the RAM the experts sit in. Never raises."""
     try:
         subprocess.run(["docker", "stop", "-t", "5", CONTAINER], capture_output=True, timeout=30)
+        # --rm removes the container a moment AFTER `docker stop` returns; a
+        # start in that gap failed with "container name already in use".
+        for _ in range(50):
+            if _served() is None:
+                break
+            time.sleep(0.2)
     except Exception:
         pass
     _STATE["model"] = None
@@ -165,7 +204,7 @@ def stop():
 
 
 def ensure(model, should_stop=None):
-    if _STATE.get("model") == str(model).split(":")[0] and running(timeout=1):
+    if _STATE.get("model") == name_of(model) and running(timeout=1):
         return True
     return start(model, should_stop=should_stop)
 
@@ -314,12 +353,8 @@ def chat_url():
 # the one call every part of Johan makes
 # --------------------------------------------------------------------------
 
-OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"   # until Ollama is retired
-
-
 def chat(messages, *, model=None, tools=None, schema=None, stream=False, on_delta=None,
-         max_tokens=None, temperature=0.3, logprobs=0, keep_alive=None, num_ctx=None,
-         timeout=180):
+         max_tokens=None, temperature=0.3, logprobs=0, seed=None, timeout=180, **_old):
     """One model call. Callers say WHAT they want; only this function knows
     how the server wants it said. Returns
         {"message": {"role", "content", "tool_calls": [{"function": {"name", "arguments"}}]},
@@ -330,70 +365,42 @@ def chat(messages, *, model=None, tools=None, schema=None, stream=False, on_delt
     import johan_interrupt as ji
     import johan_assistant as ja
     model = model or ja.MODEL
-    if is_llm(model):
-        ensure(model, should_stop=ji.stop_requested)
-        req = _request(messages, tools, schema, bool(on_delta or stream), max_tokens,
-                       temperature, logprobs)
-        if not req["stream"]:
-            d = json.loads(b"".join(ji._raw_lines(chat_url(), req, timeout)))
-            if d.get("error"):
-                raise RuntimeError(f"llama-server: {str(d['error'])[:400]}")
-            return _result(from_openai(d, model))
-        tr = StreamTranslator(model)
-        last, text = None, []
-        for line in ji._raw_lines(chat_url(), req, timeout):
-            for c in tr.feed(line):
-                if c.get("error"):
-                    raise RuntimeError(f"llama-server: {c['error']}")
-                piece = (c.get("message") or {}).get("content")
-                if piece:
-                    text.append(piece)
-                    if on_delta:
-                        on_delta(piece)
-                if c.get("done"):
-                    last = c
-        last = last or tr.final()
-        # The streamed pieces ARE the answer: the final chunk only carries tool
-        # calls and counts. Returning it alone gave every streamed reply "".
-        last = dict(last, message=dict(last.get("message") or {}, content="".join(text)))
-        return _result(last, streamed=True)
-    # Ollama (the 4B) — goes when Ollama does.
-    payload = {"model": model, "messages": messages, "think": False,
-               "stream": bool(on_delta or stream),
-               "keep_alive": keep_alive or ja.KEEP_ALIVE,
-               "options": {"temperature": temperature, "num_ctx": num_ctx or ja.NUM_CTX,
-                           **({"num_predict": max_tokens} if max_tokens else {})}}
-    if tools:
-        payload["tools"] = tools
-    if schema is not None:
-        payload["format"] = schema
-    if logprobs:
-        payload.update(logprobs=True, top_logprobs=int(logprobs))
-    url = ja.OLLAMA_CHAT        # johan_assistant's, so tests can point it at a fake server
-    if not payload["stream"]:
-        return _result(ji.ollama_post(url, payload, timeout=timeout))
-    content, calls, last = [], [], {}
-    for c in ji.ollama_lines(url, payload, idle_timeout=timeout):
-        if c.get("error"):
-            raise RuntimeError(f"Ollama: {c['error']}")
-        msg = c.get("message") or {}
-        if msg.get("content"):
-            content.append(msg["content"])
-            if on_delta:
-                on_delta(msg["content"])
-        calls.extend(msg.get("tool_calls") or [])
-        if c.get("done"):
-            last = c
-    last = dict(last, message={"role": "assistant", "content": "".join(content),
-                               **({"tool_calls": calls} if calls else {})})
+    if not is_llm(model):
+        raise RuntimeError(f"unknown model {model!r} — Johan's models are {', '.join(MODELS)}")
+    ensure(model, should_stop=ji.stop_requested)
+    req = _request(messages, tools, schema, bool(on_delta or stream), max_tokens,
+                   temperature, logprobs, seed)
+    if not req["stream"]:
+        d = json.loads(b"".join(ji._raw_lines(chat_url(), req, timeout)))
+        if d.get("error"):
+            raise RuntimeError(f"llama-server: {str(d['error'])[:400]}")
+        return _result(from_openai(d, model))
+    tr = StreamTranslator(model)
+    last, text = None, []
+    for line in ji._raw_lines(chat_url(), req, timeout):
+        for c in tr.feed(line):
+            if c.get("error"):
+                raise RuntimeError(f"llama-server: {c['error']}")
+            piece = (c.get("message") or {}).get("content")
+            if piece:
+                text.append(piece)
+                if on_delta:
+                    on_delta(piece)
+            if c.get("done"):
+                last = c
+    last = last or tr.final()
+    # The streamed pieces ARE the answer: the final chunk only carries tool
+    # calls and counts. Returning it alone gave every streamed reply "".
+    last = dict(last, message=dict(last.get("message") or {}, content="".join(text)))
     return _result(last, streamed=True)
 
 
-def _request(messages, tools, schema, stream, max_tokens, temperature, logprobs):
+def _request(messages, tools, schema, stream, max_tokens, temperature, logprobs, seed=None):
     return to_openai({"messages": messages, "tools": tools, "format": schema, "stream": stream,
                       "think": False, "logprobs": bool(logprobs), "top_logprobs": logprobs,
                       "options": {"temperature": temperature,
-                                  **({"num_predict": max_tokens} if max_tokens else {})}})
+                                  **({"num_predict": max_tokens} if max_tokens else {}),
+                                  **({"seed": seed} if seed is not None else {})}})
 
 
 def _result(body, streamed=False):
