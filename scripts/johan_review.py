@@ -9,7 +9,7 @@ can never hold VRAM when a game starts) or by hand:
     python johan_review.py --gate     # run the tool eval, compare to baseline
 
 What it does NOT do: change behaviour on its own. Every fix is staged with
-propose_edit and applied only when Riadh OKs it (shown as a card in the chat), and `--gate` runs
+propose_edit and applied only when Zeros OKs it (shown as a card in the chat), and `--gate` runs
 the eval so an approved batch is checked before it is trusted. A 4B model
 editing its own prompt unreviewed is the fastest way to make it worse.
 
@@ -189,7 +189,7 @@ def _ensure_markers():
         RECIPES.write_text(
             "# Recipes Johan learned from its own failures\n\n"
             "Each line was proposed by johan_review.py from a real turn that failed and\n"
-            "then found a call that worked, and approved by Riadh in F4. Injected into\n"
+            "then found a call that worked, and approved by Zeros in F4. Injected into\n"
             "the system prompt. Delete any line that stops being true.\n\n"
             f"{RECIPE_MARKER}\n")
 
@@ -213,7 +213,7 @@ def verify_recipes(result, limit=12):
             # recipes, roughly half wrong — `ls ~/.local/share/applications/`
             # (the exact bad habit fixed by hand) scored 0.98 as an answer to
             # "what apps are installed". The check knows RELATED, not RIGHT,
-            # so the threshold only trims; Riadh's y/n in F4 is the filter.
+            # so the threshold only trims; Zeros's y/n in F4 is the filter.
             if p >= 0.95:
                 seen_calls.add(sig)
                 verified.append({"message": rec["message"], "tool": c["tool"], "args": args,

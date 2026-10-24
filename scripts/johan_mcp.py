@@ -40,7 +40,7 @@ EXPOSED = ["generate_image", "find_images", "web_search", "deep_research", "memo
            "build_apply_queue", "search_jobs", "get_job", "get_pipeline_stats", "draft_cv",
            "applied", "try_page"]
 
-INSTRUCTIONS = ("Johan's tools on Riadh's PC: drawing and picture search, web search on his "
+INSTRUCTIONS = ("Johan's tools on Zeros's PC: drawing and picture search, web search on his "
                 "own search engine, his job applications, and memories about him.")
 
 def _open(path):

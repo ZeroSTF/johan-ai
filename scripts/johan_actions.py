@@ -1,4 +1,4 @@
-"""Changes to his machine — Johan proposes, Riadh approves, then it runs.
+"""Changes to his machine — Johan proposes, Zeros approves, then it runs.
 
 run_command is read-only by design. This is the other half: installing
 software, changing a setting, starting a service, moving a file. The model

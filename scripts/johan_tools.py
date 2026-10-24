@@ -227,7 +227,7 @@ def web_search(query, count=6, site=None):
             "SEARCH RETURNED NOTHING — this usually means the search backend "
             "is degraded, not that the subject doesn't exist. "
             + (f"These engines failed: {', '.join(dead)}. " if dead else "")
-            + "Tell Riadh the search failed and offer to retry; do NOT claim "
+            + "Tell Zeros the search failed and offer to retry; do NOT claim "
               "the thing he asked about is obscure or nonexistent.")
     return out
 
@@ -531,7 +531,7 @@ def fetch_page(url, max_chars=1800):
                               "thread. Reddit content is searchable via "
                               "web_search snippets but not readable without "
                               "Reddit API credentials (OAuth). Use the snippet, "
-                              "or ask Riadh to add a Reddit API key.",
+                              "or ask Zeros to add a Reddit API key.",
                      "url": url}
         text = _reddit_text(r.text) or _visible_text(r.text)
         return _page_out(url, text, max_chars)
@@ -787,7 +787,7 @@ def verify_staged_cvs():
 
 
 def search_conversations(query, limit=6):
-    """Search past conversations with Riadh.
+    """Search past conversations with Zeros.
 
     Distinct from `recall`: memories are facts he asked to be kept, this is
     what was actually said in earlier sessions — "what did we decide about
@@ -825,7 +825,7 @@ def check_company_hiring(company, ats=None):
     versus tied to a named country.
 
     This is the project's central question as a tool: what decides whether
-    Riadh is hirable is *how* a company hires — home-based worldwide as
+    Zeros is hirable is *how* a company hires — home-based worldwide as
     policy, or only where it holds a legal entity. `company` is the board
     token (usually the lowercase name, e.g. 'supabase', 'canonical')."""
     import probe_worldwide as pw
@@ -862,7 +862,7 @@ def check_company_hiring(company, ats=None):
 # A few hundred characters that are ALWAYS in the system prompt, that the
 # model can rewrite mid-conversation.
 #
-# Why this and not `remember`: memories are durable facts about Riadh and
+# Why this and not `remember`: memories are durable facts about Zeros and
 # require the model to *decide* to call `memory` to see them — which a 4B
 # often doesn't. The scratchpad is different in kind: working state for the
 # task at hand ("debugging the searxng timeout; he prefers I check the
@@ -1489,7 +1489,7 @@ def _edit_path(path):
     """Resolve a file propose_edit/apply_edit may touch. Returns
     (absolute_path, display_name) or raises ValueError.
 
-    Widened 2026-09-23 at Riadh's request from ~/johan only to ~/johan OR any
+    Widened 2026-09-23 at Zeros's request from ~/johan only to ~/johan OR any
     git repository under his home — git means every applied edit also shows
     in `git diff` and is revertible there. Still refused: anything outside
     $HOME, secrets (SENSITIVE), .git internals, symlinks that resolve out of
@@ -1609,7 +1609,7 @@ def propose_edit(path, old_string, new_string, why=""):
     return {"proposed": True, "edit_id": edit_id, "path": display,
             "lines_added": sum(1 for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++")),
             "lines_removed": sum(1 for l in diff.splitlines() if l.startswith("-") and not l.startswith("---")),
-            "note": "NOT applied. Riadh reviews the diff and applies it "
+            "note": "NOT applied. Zeros reviews the diff and applies it "
                     "himself — it is shown to him in Johan's chat on the PC.",
             "diff": diff[:1200]}
 
@@ -2093,7 +2093,7 @@ TOOLS = [
     # the first message of every chat, at ~230 tok/s on this card (the whole
     # tool list was 3,889 tokens = ~17 s). Guidance that matters lives once,
     # in the system prompt, not duplicated in both places.
-    _fn("memory", "Riadh's stored facts. `text` saves one (when he says remember, or "
+    _fn("memory", "Zeros's stored facts. `text` saves one (when he says remember, or "
                    "states a lasting fact/preference); `query` searches; neither lists "
                    "all; `forget_id` deletes a wrong one.",
         {"text": {"type": "string"}, "query": {"type": "string"},

@@ -57,7 +57,7 @@ def run_python(code, files=None, timeout=20):
     """Run `code` (Python 3.12 with numpy, pandas, matplotlib) in the sandbox.
 
     Files listed in `files` are readable at /work/in/<name>. Anything the
-    script saves under /work/out/ comes back as a file path Riadh can open.
+    script saves under /work/out/ comes back as a file path Zeros can open.
     Returns stdout, stderr, exit code and output files."""
     if not isinstance(code, str) or not code.strip():
         return {"error": "run_python needs `code` — a Python script as a string"}

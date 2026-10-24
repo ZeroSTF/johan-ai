@@ -71,7 +71,7 @@ THING = re.compile(r"\b(game|app|application|web ?page|page|site|website|web ?ap
 # Measured 2026-10-21 on 20 labeled messages: a three-way build/small/other
 # wording missed 3 ("write a python script…" went to "small"); this yes/no
 # missed 1 ("write a script for my youtube video" — a fair ambiguity).
-BUILD_Q = "Is Riadh asking Johan to write software?"
+BUILD_Q = "Is Zeros asking Johan to write software?"
 BUILD_OPTS = {
     "build": "yes: he wants a program written or extended — a game, a web page or app, a "
              "script, a command-line tool, a bot — that he will run",
@@ -175,7 +175,7 @@ LAST_FOLDER = {}        # session id -> folder of the last build in that chat
 # model calls
 # --------------------------------------------------------------------------
 
-BUILD_SYSTEM = """You are the build module of Johan, Riadh's local assistant. You write real,
+BUILD_SYSTEM = """You are the build module of Johan, Zeros's local assistant. You write real,
 complete, working code for small projects, one step at a time. Rules:
 - Web projects: plain HTML/CSS/JavaScript files, no frameworks, nothing from the internet
   (no CDN, no fonts, no fetch). Load scripts with plain <script src="x.js"></script> tags
@@ -327,7 +327,7 @@ def _rel(p):
 
 
 def make_plan(request, folder, main_name=None, changes=None, earlier=None, should_stop=None):
-    lines = [f"What Riadh asked: {request}",
+    lines = [f"What Zeros asked: {request}",
              f"Project folder: {folder}" if folder else "Project folder: a new folder (named after the title)"]
     if main_name:
         lines.append(f"The main file must be named {main_name}.")
@@ -607,7 +607,7 @@ def _step_prompt(plan, i, feedback):
     paths = [f["path"] for f in plan["files"]]
     full = set(st["files"]) | {plan["main"]}
     lines = [f"Project: {plan['title']} ({plan['kind']}) in {folder}",
-             f"What Riadh asked: {plan['request']}",
+             f"What Zeros asked: {plan['request']}",
              f"Spec: {plan['spec']}",
              "Files:\n" + "\n".join(f"- {f['path']}: {f['purpose']}" for f in plan["files"]),
              "Steps:\n" + "\n".join(

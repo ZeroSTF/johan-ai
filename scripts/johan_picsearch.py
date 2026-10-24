@@ -331,7 +331,7 @@ def find_images(query, count=4, should_stop=None):
             "IMAGE SEARCH RETURNED NOTHING USABLE — the search backend is probably "
             "degraded, not that no pictures exist. "
             + (f"These engines failed: {', '.join(dead)}. " if dead else "")
-            + "Tell Riadh the search failed and offer to retry.")}
+            + "Tell Zeros the search failed and offer to retry.")}
 
     dropped = {"download": 0, "duplicate": 0, "not_a_match": 0}
     kept, hashes, maybes, check_errors = [], [], [], []
@@ -391,7 +391,7 @@ def find_images(query, count=4, should_stop=None):
             keep(im, x, unsure=True)
         dropped["unsure"] = len(maybes) - sum(1 for k in kept if k.get("unsure"))
     except Stopped:
-        return {**base, "error": "stopped — Riadh pressed esc", "pictures": kept}
+        return {**base, "error": "stopped — Zeros pressed esc", "pictures": kept}
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
 

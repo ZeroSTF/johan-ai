@@ -3,7 +3,7 @@
 The one explicit way to refresh the job list: `/refresh` in the TUI or on
 or `python johan_refresh.py`. Deliberately NOT a tool the chat
 model can call (CLAUDE.md "Deliberately not exposed: Stage 1 or Stage 2"):
-it is ~20 minutes of network and GPU work, so only Riadh starts it. And not
+it is ~20 minutes of network and GPU work, so only Zeros starts it. And not
 automatic either — he declined the login-time refresh (2026-10-07).
 
 Steps, each a subprocess pinned to cores 8-15 (games keep 0-3):

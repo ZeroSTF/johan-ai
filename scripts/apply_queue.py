@@ -1,7 +1,7 @@
 """Build an apply queue: the jobs worth applying to, best fit first, each with
 a compiled CV and the posting link.
 
-This is the hand-off point of the whole pipeline. Riadh applies himself, so
+This is the hand-off point of the whole pipeline. Zeros applies himself, so
 all Johan owes him is: which jobs, in what order, the link, and a verified
 PDF to upload. Nothing here submits anything.
 
@@ -119,7 +119,7 @@ def experience_tier(facts, job):
     This existed as data and was never used: `min_years` appeared nowhere in
     the ranking and `seniority` only in the printed line, so a posting asking
     for 7+ years ranked purely on keyword overlap and landed in the queue.
-    Riadh has ~3 years; being handed senior roles wasted his time reading
+    Zeros has ~3 years; being handed senior roles wasted his time reading
     them."""
     his = int(facts["owner"].get("years_professional_experience") or 3)
     yrs = years_required(job)

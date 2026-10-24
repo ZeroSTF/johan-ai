@@ -1,6 +1,6 @@
 """Probe candidate ATS boards to find Canonical-shaped employers.
 
-The core finding of this project is that ONE variable decides whether Riadh
+The core finding of this project is that ONE variable decides whether Zeros
 can be hired: does the company hire home-based worldwide as policy, or only
 where it holds a legal entity? That variable is invisible on a job board's
 face — but it IS visible in aggregate across a company's whole board, because

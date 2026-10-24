@@ -107,7 +107,7 @@ EMBED_URL = "http://127.0.0.1:8100/embed"
 QDRANT_HOST, QDRANT_PORT = "127.0.0.1", 6333
 SESSION_LOG_DIR = ROOT / "brain/inbox"
 
-SYSTEM_PROMPT = """You are Johan, Riadh's own AI, running on his PC in Tunisia. He's a
+SYSTEM_PROMPT = """You are Johan, Zeros's own AI, running on his PC in Tunisia. He's a
 software engineer and gamer. Talk like a friend who happens to be very capable:
 relaxed, direct, match his tone and slang, have opinions, joke back. Never act
 like a customer-service bot, never pitch your features, and NEVER bring up job
@@ -320,7 +320,7 @@ def draft_cv(job_id):
         "output_dir": str(out_dir), "verified": not problems,
         "pdf_path": str(pdf) if pdf.exists() else None,
         "problems": problems,
-        "note": "This is a draft in staged/ for Riadh to review and send "
+        "note": "This is a draft in staged/ for Zeros to review and send "
                 "himself — nothing was submitted anywhere.",
     }
 
@@ -344,13 +344,13 @@ def build_apply_queue(verdict="likely", limit=5, include_overreach=False):
                                f"which he doesn't have")
                               if r["gaps_in_title"] else None}
                   for i, r in enumerate(rows, 1)],
-        "note": "Nothing submitted. Give Riadh the apply_url and cv_pdf for "
+        "note": "Nothing submitted. Give Zeros the apply_url and cv_pdf for "
                 "each — he applies himself.",
     }
 
 
 def mark_applied(job_id, applied=True):
-    """Record that Riadh actually sent an application.
+    """Record that Zeros actually sent an application.
 
     The `applications` table has existed in the schema since day one and was
     never written to — so there was no record anywhere of what he'd applied
@@ -565,7 +565,7 @@ _ORDER = re.compile(r"^\s*(please\s+)?(install|uninstall|remove|delete|trash|set
                     r"switch|put|clean)\b", re.I)
 _OFFER = re.compile(r"\b(want me to|should i|shall i|would you like me to|do you want me to|"
                     r"want me to go ahead)\b[^?]*\?\s*$", re.I)
-DO_IT_NOTE = ("[note from Johan's runtime, not Riadh] He already told you to do it. Don't "
+DO_IT_NOTE = ("[note from Johan's runtime, not Zeros] He already told you to do it. Don't "
               "ask again: call propose_action (or files / propose_edit) now — the approval card "
               "shows him the exact change and he says yes or no there.")
 
@@ -722,7 +722,7 @@ def execute_tool(call, seen, hop, user_message, should_stop=None):
             extra = {"should_stop": should_stop} if should_stop and name in STOPPABLE else {}
             result = ji.run_stoppable(fn, **args, **extra)
         except ji.Interrupted:
-            result = {"error": "stopped — Riadh pressed esc"}
+            result = {"error": "stopped — Zeros pressed esc"}
         except TypeError as e:
             # A 4B model gets argument names wrong often enough that an
             # uncaught TypeError killing the whole turn is the common
@@ -1124,7 +1124,7 @@ def rewarm(messages):
     threading.Thread(target=go, daemon=True).start()
 
 
-FINAL_NUDGE = ("[note from Johan's runtime, not Riadh] No more tool calls in this "
+FINAL_NUDGE = ("[note from Johan's runtime, not Zeros] No more tool calls in this "
                "message — your tools are back in his next one. Answer him now in plain "
                "text from what the tool results above show; say plainly what you "
                "couldn't finish and that you can carry on.")
@@ -1281,7 +1281,7 @@ def delete_session(session_id):
     if transcript.exists():
         transcript.unlink()
         removed.append("transcript")
-    # Images drawn in this conversation go with it (Riadh, 2026-10-03:
+    # Images drawn in this conversation go with it (Zeros, 2026-10-03:
     # "they should get deleted when i delete the chat").
     try:
         import johan_images
@@ -1386,12 +1386,12 @@ def prime_with_memories(system_prompt, limit=8):
         # "use `memory` for more" was an open invitation, and the model took
         # it — on "hi" it called `memory` with no arguments, i.e. re-fetched
         # this exact list it was already holding. Say they are loaded.
-        out = (f"{out}\nWhat you already know about Riadh — these are "
+        out = (f"{out}\nWhat you already know about Zeros — these are "
                f"ALREADY LOADED, do not call `memory` to re-read them. Only "
                f"call `memory(query=...)` to look for something specific "
                f"that is NOT listed here; `forget` if one is wrong:\n"
                f"{lines}\n")
-    # Recipes Riadh approved from johan_review's proposals (brain/recipes.md).
+    # Recipes Zeros approved from johan_review's proposals (brain/recipes.md).
     # Capped: the prompt is prefilled on every new conversation (~2.6 s for the
     # current ~4K tokens), so every line here costs time on every chat.
     try:
@@ -1399,7 +1399,7 @@ def prime_with_memories(system_prompt, limit=8):
         lines = [l for l in rec.split("-->", 1)[-1].splitlines() if l.startswith("- ")]
         if lines:
             out = (f"{out}\nRecipes learned from earlier mistakes (approved by "
-                   f"Riadh):\n" + "\n".join(lines)[:1200] + "\n")
+                   f"Zeros):\n" + "\n".join(lines)[:1200] + "\n")
     except OSError:
         pass
     # The scratchpad is injected unconditionally and last, so it is the most

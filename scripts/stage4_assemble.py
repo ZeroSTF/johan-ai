@@ -37,7 +37,7 @@ FACTS = ROOT / "job-hunter/facts/bullets.yaml"
 TEMPLATE = ROOT / "job-hunter/templates/base.tex.tmpl"
 OUT_ROOT = ROOT / "job-hunter/staged/applications"
 
-# Slot counts per role/project — matches the bullet counts in Riadh's own
+# Slot counts per role/project — matches the bullet counts in Zeros's own
 # hand-written CV, so tailoring changes WHICH bullets show, not how long
 # each section is relative to what he already uses.
 ROLE_SLOTS = {

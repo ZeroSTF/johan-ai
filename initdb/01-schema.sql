@@ -31,7 +31,7 @@ CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status);
 CREATE INDEX IF NOT EXISTS jobs_score_idx  ON jobs (match_score DESC NULLS LAST);
 
 -- Added 2026-09-10 for the assistant's own memory and task list. These are
--- Johan's, not the job pipeline's: things Riadh explicitly asked it to
+-- Johan's, not the job pipeline's: things Zeros explicitly asked it to
 -- remember, and a durable todo list. Semantic recall lives in the Qdrant
 -- collection `johan_memory`; Postgres is the source of truth for the text.
 CREATE TABLE IF NOT EXISTS memories (

@@ -41,7 +41,7 @@ WORLDWIDE_STRICT = re.compile(
 WORLDWIDE_LOOSE = re.compile(
     r"\b(anywhere|global|globally|international|fully distributed)\b", re.I)
 
-# Places that INCLUDE Tunisia, or MENA markets Riadh is targeting.
+# Places that INCLUDE Tunisia, or MENA markets Zeros is targeting.
 # "africa" must not match inside "South Africa", which is an excluded market.
 INCLUSIVE = re.compile(
     r"\b(emea|mena|middle east|maghreb|"

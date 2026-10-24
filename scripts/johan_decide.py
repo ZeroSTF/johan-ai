@@ -49,9 +49,9 @@ import requests
 LETTERS = string.ascii_uppercase[:20]      # Ollama accepts top_logprobs up to 20
 
 DECIDE_SYSTEM = (
-    "You are the decision module of Johan, a local assistant on Riadh's Linux "
+    "You are the decision module of Johan, a local assistant on Zeros's Linux "
     "PC (Pop!_OS). Johan can run read-only shell commands anywhere on the "
-    "machine, read and search files, search the web, query Riadh's job-search "
+    "machine, read and search files, search the web, query Zeros's job-search "
     "database, and remember facts about him. You are shown a situation and "
     "lettered options. Pick the option that best fits. Reply with the option "
     "letter only.")
@@ -84,9 +84,9 @@ ROUTE = {
              "hardware or running service",
     "web": "information from the internet — news, weather, forums, guides, "
            "software versions, facts that change",
-    "jobs": "Riadh's job search — postings, the apply queue, CVs, applications, "
+    "jobs": "Zeros's job search — postings, the apply queue, CVs, applications, "
             "which companies can hire him",
-    "personal": "a fact about Riadh himself that he told Johan earlier",
+    "personal": "a fact about Zeros himself that he told Johan earlier",
     "compute": "a calculation, or today's date or time",
     "talk": "nothing to look up — a greeting, thanks, an opinion, or general "
             "knowledge Johan already has",
@@ -112,7 +112,7 @@ NULLS = {"route": "Message: N/A", "step_done": "Goal: N/A\nTool result: N/A",
          "supported": "Tool result: N/A\nAnswer: N/A", "risky": "Command: N/A",
          "multi_step": "Message: N/A"}
 
-RESEARCH_Q = "Is Riadh asking Johan to research something in depth?"
+RESEARCH_Q = "Is Zeros asking Johan to research something in depth?"
 RESEARCH_OPTS = {"yes": "he explicitly asks for research, a deep dive, or to "
                         "look into something properly across many sources",
                  "no": "an ordinary question, or a quick lookup"}
@@ -121,7 +121,7 @@ NULLS["research_intent"] = "Message: N/A"
 # Asked only when research_intent said yes: "research X and draw him" wants a
 # picture, not a report. The forced research used to answer every such
 # message with a report and stop (10/10 on its first labeled set).
-GOAL_Q = "What does Riadh want Johan to hand back for this message?"
+GOAL_Q = "What does Zeros want Johan to hand back for this message?"
 GOAL_OPTS = {"report": "an answer or report about the topic: facts, a comparison, an explanation",
              "make": "something made or done with what is learned: a picture, a drawing, code, a "
                      "file, a change on his machine, a text for someone, or ideas and a plan "

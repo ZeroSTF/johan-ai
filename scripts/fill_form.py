@@ -1,4 +1,4 @@
-"""Open a job application form, fill it from a plan, and leave it for Riadh.
+"""Open a job application form, fill it from a plan, and leave it for Zeros.
 
 Runs in ~/johan/venv-browser (Playwright). Two modes:
 
@@ -7,12 +7,12 @@ Runs in ~/johan/venv-browser (Playwright). Two modes:
   --fill URL         VISIBLE window. Prints the fields as one JSON line,
                      reads a fill plan as one JSON line on stdin, fills it,
                      highlights every field, shows a banner, prints
-                     {"filled": ...}, then stays open until Riadh closes the
+                     {"filled": ...}, then stays open until Zeros closes the
                      window.
 
 THE ONE RULE: this script never clicks anything. Not Submit, not "Next",
 not a cookie banner. It types into fields and attaches the CV; the Submit
-button is Riadh's (CLAUDE.md, changed 2026-09-23 at his request). There is
+button is Zeros's (CLAUDE.md, changed 2026-09-23 at his request). There is
 no code path here that calls .click() on a page element.
 
 Colours: green = filled from his profile/answers file, yellow = drafted by

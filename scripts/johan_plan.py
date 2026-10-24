@@ -124,7 +124,7 @@ _CHOICE = re.compile(
     r"\b(or|ou|which|what|quel|quelle|quels|quelles|lequel|laquelle|"
     r"dis-moi|tell me|choose|pick)\b", re.I)
 
-CLARIFY_Q = "Is Johan's reply waiting for Riadh to choose or say something before it can do what he asked?"
+CLARIFY_Q = "Is Johan's reply waiting for Zeros to choose or say something before it can do what he asked?"
 CLARIFY_OPTS = {"yes": "it cannot go on until he picks an option or says which or what",
                 "no": "it answered or did the task; a question at the end is only an "
                       "optional offer"}

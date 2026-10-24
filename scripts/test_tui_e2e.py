@@ -1,7 +1,7 @@
 """End-to-end test of the interface: the real app, the real model, real keys.
 
 The pilot tests in this project so far checked screens render. This one uses
-Johan the way Riadh does — types questions, waits for streamed answers, runs
+Johan the way Zeros does — types questions, waits for streamed answers, runs
 tools, stops an answer with esc, recalls history with ↑, switches tabs, draws
 a picture and deletes the chat it's in — and asserts on what ends up on screen.
 

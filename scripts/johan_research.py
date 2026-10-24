@@ -19,7 +19,7 @@ report. Every other judgement is cheap and bounded:
   8. SOURCES   appended by CODE from the notes actually cited — the model
                never writes a URL, so a source cannot be invented
 
-Time-boxed: `minutes` (default 3, max 5 — Riadh asked for a few minutes, not
+Time-boxed: `minutes` (default 3, max 5 — Zeros asked for a few minutes, not
 ten). Every stage checks the deadline; running out of time produces a
 report from what was read so far, never an empty hand.
 """

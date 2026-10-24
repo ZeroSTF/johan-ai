@@ -1,4 +1,4 @@
-"""autofill_application — fill a job application form; Riadh clicks Submit.
+"""autofill_application — fill a job application form; Zeros clicks Submit.
 
 Roadmap step 5 (approved 2026-09-23: "Johan fills, you click Submit").
 Opens the posting's form in a VISIBLE browser window (fill_form.py, in
@@ -89,7 +89,7 @@ RESUME = re.compile(r"\b(resume|résumé|cv|curriculum)\b", re.I)
 COVER = re.compile(r"cover letter", re.I)
 
 DRAFT_PROMPT = (
-    "Write Riadh's answer to this job application question, in the first "
+    "Write the candidate's answer to this job application question, in the first "
     "person, 50-120 words, plain and specific. Use ONLY the facts below from "
     "his real career record. Do not add any technology, employer, project, "
     "number, practice or claim that is not in them, and no superlatives "
@@ -98,7 +98,7 @@ DRAFT_PROMPT = (
     "Job: {title} at {company}\nQuestion: {question}\n\nFacts:\n{facts}")
 
 MATCH_Q = "Which saved answer does this application question ask for?"
-OPTION_Q = "Which option on the form matches Riadh's saved answer?"
+OPTION_Q = "Which option on the form matches the candidate's saved answer?"
 
 
 def _clean(label):
@@ -256,7 +256,7 @@ def build_plan(fields, answers, cv, job):
 
 def autofill_application(job_id, dry_run=False):
     """Fill the application form for `job_id` in a visible browser window.
-    Riadh reviews and clicks Submit himself. `dry_run` plans without opening
+    Zeros reviews and clicks Submit himself. `dry_run` plans without opening
     a window (reads the form headlessly)."""
     # The form opens in a window on the PC's screen. With no display (a
     # service, an ssh session) that would fail as a confusing "could not

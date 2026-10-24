@@ -1,6 +1,6 @@
 """johan_learn — corrections become durable behaviour rules.
 
-When Riadh corrects HOW Johan behaves ("stop ending every answer with a
+When Zeros corrects HOW Johan behaves ("stop ending every answer with a
 question", "I told you, use metric", "don't use bullet points"), the rule is
 saved as a memory of kind 'feedback' and injected into every later
 session's system prompt, in a short "How he wants you to behave" block.
@@ -60,14 +60,14 @@ PREFILTER = re.compile(
     r"i (hate|don'?t like) (it )?when you|stop it|cut it out)\b",
     re.I)
 
-FEEDBACK_Q = "Is Riadh correcting how Johan behaves?"
+FEEDBACK_Q = "Is Zeros correcting how Johan behaves?"
 FEEDBACK_OPTS = {
     "yes": "he tells Johan to change how it behaves from now on — what it does, "
            "how it answers, its tone, format or habits",
     "no": "he corrects a fact about the world or his own situation, gives new "
           "information, asks a question, or asks for a task to be done",
 }
-FEEDBACK_NULL = "Johan said: N/A\nRiadh: N/A"
+FEEDBACK_NULL = "Johan said: N/A\nZeros: N/A"
 try:                                   # so eval_decide.py can score this kind
     import johan_decide as _jd
     _jd.NULLS.setdefault("feedback", FEEDBACK_NULL)
@@ -78,7 +78,7 @@ _SCHEMA = {"type": "object", "properties": {
     "rule": {"type": "string"}, "why": {"type": "string"}},
     "required": ["rule", "why"]}
 _WRITE_PROMPT = (
-    "Riadh just corrected his assistant Johan. Turn the correction into ONE "
+    "Zeros just corrected his assistant Johan. Turn the correction into ONE "
     "standing rule for Johan.\n"
     "rule: one short imperative sentence addressed to Johan, under 15 words "
     "(e.g. \"Don't end answers with a question.\"). Write it from Johan's "
@@ -108,7 +108,7 @@ def _context(prev_answer, message):
     prev = re.sub(r"\s+", " ", prev_answer or "").strip()
     if len(prev) > 500:
         prev = prev[:500] + "…"
-    return f"Johan said: {prev or '(nothing yet)'}\nRiadh: {message.strip()}"
+    return f"Johan said: {prev or '(nothing yet)'}\nZeros: {message.strip()}"
 
 
 def is_correction(prev_answer, message):
