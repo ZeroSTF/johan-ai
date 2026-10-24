@@ -150,6 +150,12 @@ BOILERPLATE = re.compile(
     r"we believe|we welcome|applicants from|candidates from all|"
     r"anyone, anywhere|all over the world)", re.I)
 
+# A "yes, we sponsor visas" from the model counts only when the posting itself
+# talks about visas or sponsorship: on llama.cpp granite answered "yes" for a
+# Japan-only role whose text never mentions either, turning it "likely"
+# (2026-10-24). The model may locate evidence, never invent a permission.
+SPONSOR_EVIDENCE = re.compile(r"\b(visa|visas|sponsor\w*|relocation)\b", re.I)
+
 RESIDENCY_REQ = re.compile(
     r"(must (be |reside|live|are )?(based|located|resident|residing)|"
     r"required to (be based|reside|live)|"
@@ -443,6 +449,9 @@ def main():
 
                 p = parse_one(job)
                 model_calls += 1
+                if (p.get("visa_sponsorship") == "yes"
+                        and not SPONSOR_EVIDENCE.search(job["raw_desc"] or "")):
+                    p["visa_sponsorship"] = "unclear"
                 p.update(base)
                 p["eligible_locations"] = clean_locations(
                     p.get("eligible_locations"))

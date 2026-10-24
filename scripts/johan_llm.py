@@ -47,8 +47,11 @@ MODELS = {
     "granite": {"gguf": "granite-4.1-3b.gguf", "ctx": 8192},
     # /uncensored: HauhauCS Qwen3.5-4B "Aggressive" (was Ollama's johan-uncensored).
     # The uncensored 35B was tried 2026-10-24 and dropped: ~40% slower here.
+    # Its own template raises on Johan's mid-conversation system notes (Ollama
+    # needed RENDERER qwen3.5 for the same reason); templates/qwen35u.jinja is
+    # that template with the check replaced by rendering the note in place.
     "qwen35u": {"gguf": "Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
-                "mmproj": "mmproj-qwen3.5-4b-uncensored.gguf"},
+                "mmproj": "mmproj-qwen3.5-4b-uncensored.gguf", "template": "qwen35u.jinja"},
 }
 # Old Ollama names still found in configs, sessions and environment variables.
 ALIASES = {"johan-extract": "granite", "johan-uncensored": "qwen35u"}
@@ -156,6 +159,7 @@ def _start(model, wait, should_stop):
            "-v", f"{L}/libnvidia-ptxjitcompiler.so.1:{L}/libnvidia-ptxjitcompiler.so.1:ro",
            "-v", f"{L}/libgomp.so.1:{L}/libgomp.so.1:ro",
            "-v", f"{BUILD}:/llama:ro", "-v", f"{NV}:/nv:ro", "-v", f"{LLAMA / 'models'}:/models:ro",
+           "-v", f"{LLAMA / 'templates'}:/templates:ro",
            # the card has no precompiled kernels in the release: the driver
            # JIT-compiles them once (~75 s) and keeps them here
            "-v", f"{LLAMA / 'cuda-cache'}:/cache",
@@ -179,6 +183,8 @@ def _start(model, wait, should_stop):
            # agents like OpenCode don't): at ~28 tok/s it doubles a reply.
            "--chat-template-kwargs", '{"enable_thinking": false}',
            "--host", "127.0.0.1", "--port", str(PORT)]
+    if m.get("template"):
+        cmd[-4:-4] = ["--chat-template-file", f"/templates/{m['template']}"]
     if m.get("n_cpu_moe"):
         cmd[-4:-4] = ["--n-cpu-moe", str(m["n_cpu_moe"])]
     if m.get("mmproj") and (LLAMA / "models" / m["mmproj"]).is_file():
