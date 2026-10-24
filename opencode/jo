@@ -15,15 +15,30 @@ export PATH="$HOME/.nvm/versions/node/v24.18.0/bin:$PATH"
 export OPENCODE_DISABLE_MODELS_FETCH=1
 
 if ! "$PY" "$LLM" status | grep -q '"up": true'; then
-    echo "jo: starting the model (about 20 s; the first message also reads the setup, ~1-2 min)…" >&2
+    echo "jo: starting the model (about 20 s)…" >&2
     if ! "$PY" "$LLM" start qwen36 >/dev/null; then
         echo "jo: the model didn't start — is Johan paused (GameMode)? try johan-resume" >&2
         exit 1
     fi
 fi
 
+# Read OpenCode's setup (~13k tokens, ~3.5 min) into the model while the UI
+# opens, so his first message doesn't pay for it (warmup.py). Not for `jo run`:
+# there the question itself is the first request.
+warm=""
+if [ "${1:-}" != "run" ]; then
+    setsid "$PY" "$HOME/johan/opencode/warmup.py" >"$HOME/johan/logs/jo-warmup.log" 2>&1 &
+    warm=$!
+fi
+
 opencode "$@"
 rc=$?
-# JO_KEEP=1 leaves the model loaded (scripts running several `jo run`s in a row).
-[ -n "${JO_KEEP:-}" ] || "$PY" "$LLM" stop >/dev/null 2>&1
+[ -n "$warm" ] && kill -- -"$warm" 2>/dev/null
+# Unload only when nothing else is using the model: another jo/OpenCode window
+# would lose it mid-answer (quitting one jo killed a running session's model).
+# JO_KEEP=1 leaves it loaded (scripts running several `jo run`s in a row).
+others=$(pgrep -x opencode | grep -vc "^$$\$" || true)
+if [ -z "${JO_KEEP:-}" ] && [ "${others:-0}" -eq 0 ]; then
+    "$PY" "$LLM" stop >/dev/null 2>&1
+fi
 exit $rc
