@@ -14,6 +14,10 @@ import asyncio
 import json
 import select
 import socket
+import os
+# These test the 4B (Ollama) path and the 4B-only crutches a smart model skips;
+# config/default-model now says qwen36.
+os.environ["JOHAN_MODEL"] = "johan-agent"
 import sys
 import threading
 import time

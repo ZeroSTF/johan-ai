@@ -670,11 +670,13 @@ def system_status():
         pass
     try:
         q = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu",
+            ["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=10)
-        used, total, util = [x.strip() for x in q.stdout.strip().split(",")]
-        out["gpu"] = {"vram_used_mb": int(used), "vram_total_mb": int(total),
+        name, used, total, util = [x.strip() for x in q.stdout.strip().split(",")]
+        # Without the name the 35B read the CPU's built-in Radeon off the CPU
+        # line and called this an "AMD Radeon GPU".
+        out["gpu"] = {"name": name, "vram_used_mb": int(used), "vram_total_mb": int(total),
                        "vram_free_mb": int(total) - int(used),
                        "gpu_util_pct": int(util)}
     except Exception as e:
@@ -684,7 +686,14 @@ def system_status():
         models = requests.get("http://127.0.0.1:11434/api/ps", timeout=5).json()
         out["models_loaded"] = [m.get("name") for m in models.get("models", [])]
     except Exception:
-        out["models_loaded"] = "ollama not reachable"
+        out["models_loaded"] = []
+    try:
+        import johan_llm
+        st = johan_llm.status()
+        if st.get("served"):
+            out["models_loaded"].append(f"{st['served']} (llama.cpp{'' if st['up'] else ', loading'})")
+    except Exception:
+        pass
 
     for name, url in (("embed_server", "http://127.0.0.1:8100/health"),
                       ("qdrant", f"{QDRANT}/collections")):

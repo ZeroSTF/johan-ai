@@ -368,7 +368,9 @@ class ApprovalCard(_Vertical):
         # earlier=True: proposed while no one could answer (self-review, the
         # phone, one-shot `johan "…"`) and shown when the app opens.
         self.earlier = earlier
-        if kind == "action":
+        if kind == "build":
+            opts = ["Yes, build it", "No"]
+        elif kind == "action":
             opts = ["Yes, run it"]
             if item.get("can_always"):
                 opts.append("Yes, and always allow this kind")
@@ -379,7 +381,7 @@ class ApprovalCard(_Vertical):
         # "yeah but use mpv instead" would APPROVE the change on its first key.
         # Any letter starts a free answer in the prompt (= no, do this instead).
         self.options = opts
-        short = {"Yes, run it": "run", "Yes, apply it": "apply",
+        short = {"Yes, run it": "run", "Yes, apply it": "apply", "Yes, build it": "build",
                  "Yes, and always allow this kind": "always allow", "No": "no"}
         nums = " · ".join(f"{i} {short[o]}" for i, o in enumerate(opts, 1))
         self.choices = Choices(opts, hint=f"{nums} · or type what you want instead · esc stops")
@@ -394,6 +396,9 @@ class ApprovalCard(_Vertical):
         yield self.choices
 
     def _title(self):
+        if self.kind == "build":
+            return mk("[b $warning]⏵ Johan wants to build[/] [b]$t[/]  [$text-muted]in $f[/]",
+                      t=self.item.get("title", ""), f=self.item.get("folder", ""))
         if self.kind == "action":
             root = " [b $error]needs your password[/]" if self.item.get("root") else ""
             head = ("⏵ Waiting from earlier: a change" if self.earlier else
@@ -408,6 +413,16 @@ class ApprovalCard(_Vertical):
 
     def _body(self):
         lines = []
+        if self.kind == "build":
+            it = self.item
+            lines.append(mk("$s", s=it.get("spec", "")))
+            for i, st in enumerate(it.get("steps", []), 1):
+                lines.append(mk("$n. $g", n=str(i), g=st))
+            lines.append(mk("[$text-muted]files: $f[/]", f=", ".join(it.get("files", []))))
+            if it.get("overwrites"):
+                lines.append(mk("[$warning]changes your existing $o[/]", o=", ".join(it["overwrites"])))
+            lines.append(mk("[$text-muted]each step is checked before the next; type to change the plan[/]"))
+            return Content("\n").join(lines)
         if self.kind == "action":
             for i, st in enumerate(self.item.get("steps", []), 1):
                 tag = "[$error]root[/] " if st.get("root") else ""

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# jo — Johan in OpenCode: start the local 35B, open OpenCode, unload the model on exit.
+#
+#   jo                 the OpenCode interface
+#   jo run "question"  one-shot answer
+#
+# The model is the llama.cpp container `johan-llm` (scripts/johan_llm.py); Johan's
+# own tools (drawing, jobs, search, memory, machine changes) come in through
+# scripts/johan_mcp.py — see ~/.config/opencode/opencode.json and AGENTS.md.
+# johan-pause (GameMode) stops the model too.
+set -uo pipefail
+PY="$HOME/johan/venv-embed/bin/python3"
+LLM="$HOME/johan/scripts/johan_llm.py"
+export PATH="$HOME/.nvm/versions/node/v24.18.0/bin:$PATH"
+export OPENCODE_DISABLE_MODELS_FETCH=1
+
+if ! "$PY" "$LLM" status | grep -q '"up": true'; then
+    echo "jo: starting the model (about 20 s; the first message also reads the setup, ~1-2 min)…" >&2
+    if ! "$PY" "$LLM" start qwen36 >/dev/null; then
+        echo "jo: the model didn't start — is Johan paused (GameMode)? try johan-resume" >&2
+        exit 1
+    fi
+fi
+
+opencode "$@"
+rc=$?
+# JO_KEEP=1 leaves the model loaded (scripts running several `jo run`s in a row).
+[ -n "${JO_KEEP:-}" ] || "$PY" "$LLM" stop >/dev/null 2>&1
+exit $rc

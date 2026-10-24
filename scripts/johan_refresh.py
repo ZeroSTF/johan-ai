@@ -144,6 +144,15 @@ def refresh(on_progress=None):
                 m = re.match(r"\s*(\d+)/(\d+)", line)
                 if m:
                     say(f"checking eligibility · {m.group(1)}/{m.group(2)}")
+            # Stage 2 runs granite in Ollama; a llama.cpp chat model holds the
+            # card, so stop it first (Johan starts it again on his next message).
+            try:
+                import johan_llm
+                if johan_llm.status().get("served"):
+                    say("unloading the chat model for the eligibility check")
+                    johan_llm.stop()
+            except Exception:
+                pass
             rc = _run("stage2_parse.py", ["--limit", "100000", "--status", "new"], log, parse)
             paused = rc == 3
 

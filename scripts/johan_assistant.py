@@ -50,6 +50,7 @@ import stage4_assemble as s4          # noqa: E402
 import stage5_verify as s5            # noqa: E402
 import apply_queue as aq              # noqa: E402
 import johan_interrupt as ji
+import johan_llm as _llm  # llama.cpp models: lifecycle + the Ollama translation
 import johan_tools as jt              # noqa: E402
 
 # Hard ceiling on what any single tool result may inject into the context.
@@ -61,9 +62,19 @@ MAX_TOOL_CHARS = 2400
 # relevance; the backstop must not then chop that selection in half.
 TOOL_CHAR_CAPS = {"fetch_page": 4000}
 
-OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"
+OLLAMA_CHAT = _llm.OLLAMA_CHAT     # only the 4B; every call goes through _llm.chat
 # JOHAN_MODEL lets the evals score another model through the same code path.
-MODEL = os.environ.get("JOHAN_MODEL", "johan-agent")
+def _default_model():
+    """JOHAN_MODEL, else config/default-model (one line), else the 4B. The
+    file is the one switch between the Ollama 4B and a llama.cpp model."""
+    try:
+        name = (Path.home() / "johan/config/default-model").read_text().strip()
+    except OSError:
+        name = ""
+    return os.environ.get("JOHAN_MODEL") or name or "johan-agent"
+
+
+MODEL = _default_model()
 NORMAL_MODEL = MODEL
 # /uncensored swaps the WHOLE engine to this model — chat, decide checks, plan,
 # the answer check, learning — never a mix: with one 6 GB card and
@@ -84,6 +95,8 @@ def is_uncensored():
 
 
 def model_installed(name):
+    if _llm.is_llm(name):
+        return _llm.installed(name)
     try:
         tags = requests.get("http://127.0.0.1:11434/api/tags", timeout=5).json()
         return any(m.get("name", "").split(":")[0] == name.split(":")[0]
@@ -145,9 +158,12 @@ Rules:
   `snap list` — not ~/.local/share/applications.
 - To CHANGE his machine (install/remove software, a setting or shortcut, a
   service, close an app, move/trash files) → propose_action. Look first with
-  run_command (exact package name, current setting). Any other command
-  (pip, a build, a script, git push) → run_command; he approves it first.
-  Only report something done if the result says it ran.
+  run_command (exact package name, current setting), then call propose_action
+  in the same turn — its approval card IS asking him, so never ask "want me
+  to?" in text instead. His desktop is GNOME on Pop!_OS: the top bar, clock,
+  theme, dock and shortcuts are gsettings keys. Any other command (pip, a
+  build, a script, git push) → run_command; he approves it first. Only report
+  something done if the result says it ran.
 - deep_research only when he explicitly asks for research; give its report
   and sources as returned.
 - Pictures/photos of something real ("show me X") → find_images; drawing → generate_image.
@@ -459,6 +475,7 @@ DISPATCH["find_images"] = _picsearch.find_images
 DISPATCH["deep_research"] = _research.deep_research
 DISPATCH["autofill_application"] = _autofill.autofill_application
 import johan_plan as _plan  # noqa: E402  (ask-with-options; ends the turn)
+import johan_build as _build  # noqa: E402  ("make me a game": planned, checked steps)
 TOOLS = TOOLS + [_plan.ASK_TOOL]
 DISPATCH["ask"] = _plan.ask
 
@@ -511,66 +528,50 @@ def call_model(messages, on_delta=None, no_tools=False, should_stop=None,
     Streaming exists for perceived speed only — the total time is the same,
     but watching tokens appear beats staring at "thinking…" for 30 seconds.
     Tool-call chunks carry no visible text, so a hop that decides to call a
-    tool simply streams nothing and the UI shows the tool line instead."""
-    payload = {
-        "model": MODEL, "messages": _attach.ollama_messages(messages),
-        # Omitting "tools" entirely (rather than sending []) is what actually
-        # forces prose — an empty list still leaves the tool grammar active.
-        # `tools` narrows the schema to a shortlist (the step engine routes
-        # first); an empty shortlist means no tools at all.
-        **({} if no_tools or tools == [] else {"tools": TOOLS if tools is None else tools}),
-        "think": False, "stream": bool(on_delta),
-        "keep_alive": KEEP_ALIVE,
-        "options": {"temperature": 0.3, "num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
-    }
+    tool simply streams nothing and the UI shows the tool line instead.
 
-    # Both modes go through johan_interrupt: the HTTP wait runs in a helper
-    # thread, esc is checked every 0.1 s (also during the seconds of prompt
-    # reading before a stream's first chunk), and a stop closes the socket so
-    # Ollama cancels the work instead of finishing it for nobody.
-    if not on_delta:
-        try:
-            with ji.stoppable(should_stop):
-                body = ji.ollama_post(OLLAMA_CHAT, payload, timeout=180)
-        except ji.Interrupted:
-            return {"role": "assistant", "content": "", "interrupted": True}
-        LAST_USAGE.update(prompt_tokens=body.get("prompt_eval_count", 0),
-                          completion_tokens=body.get("eval_count", 0),
-                          num_ctx=NUM_CTX)
-        out = body["message"]
-        if body.get("done_reason") == "length":
-            out["cut_off"] = True
-        return out
+    The wait goes through johan_interrupt (via johan_llm.chat): esc is
+    checked every 0.1 s, also while the prompt is read before the first
+    chunk, and a stop closes the socket so the server cancels the work."""
+    # Omitting tools entirely (rather than sending []) is what actually
+    # forces prose — an empty list still leaves the tool grammar active.
+    use = None if no_tools or tools == [] else (TOOLS if tools is None else tools)
+    got = []
 
-    content, tool_calls, role, cut = [], [], "assistant", False
+    def delta(piece):
+        got.append(piece)
+        on_delta(piece)
     try:
         with ji.stoppable(should_stop):
-            for chunk in ji.ollama_lines(OLLAMA_CHAT, payload, idle_timeout=180):
-                if chunk.get("error"):
-                    raise RuntimeError(f"Ollama: {chunk['error']}")
-                msg = chunk.get("message") or {}
-                role = msg.get("role") or role
-                piece = msg.get("content") or ""
-                if piece:
-                    content.append(piece)
-                    on_delta(piece)
-                if msg.get("tool_calls"):
-                    tool_calls.extend(msg["tool_calls"])
-                if chunk.get("done"):
-                    cut = chunk.get("done_reason") == "length"
-                    LAST_USAGE.update(
-                        prompt_tokens=chunk.get("prompt_eval_count", 0),
-                        completion_tokens=chunk.get("eval_count", 0),
-                        num_ctx=NUM_CTX)
+            r = _llm.chat(_attach.ollama_messages(messages), tools=use,
+                          on_delta=delta if on_delta else None, max_tokens=NUM_PREDICT)
     except ji.Interrupted:
-        return {"role": role, "content": "".join(content), "interrupted": True}
-
-    out = {"role": role, "content": "".join(content)}
-    if tool_calls:
-        out["tool_calls"] = tool_calls
-    if cut:
+        # Keep what was already said: "no, the other one" needs it.
+        return {"role": "assistant", "content": "".join(got), "interrupted": True}
+    LAST_USAGE.update(prompt_tokens=r["prompt_tokens"], completion_tokens=r["completion_tokens"],
+                      num_ctx=NUM_CTX)
+    out = r["message"]
+    if r["cut_off"]:
         out["cut_off"] = True
     return out
+
+
+# "install htop on my pc" → it looked, then asked "Want me to install it
+# now?" — twice in a row, despite the prompt saying the approval card IS the
+# asking. One nudge, decided by code (no model check): he gave an order, the
+# reply is an offer to carry it out.
+_ORDER = re.compile(r"^\s*(please\s+)?(install|uninstall|remove|delete|trash|set|change|turn|enable|"
+                    r"disable|make|move|rename|kill|close|restart|start|stop|add|update|upgrade|"
+                    r"switch|put|clean)\b", re.I)
+_OFFER = re.compile(r"\b(want me to|should i|shall i|would you like me to|do you want me to|"
+                    r"want me to go ahead)\b[^?]*\?\s*$", re.I)
+DO_IT_NOTE = ("[note from Johan's runtime, not Riadh] He already told you to do it. Don't "
+              "ask again: call propose_action (or files / propose_edit) now — the approval card "
+              "shows him the exact change and he says yes or no there.")
+
+
+def _asks_instead_of_doing(message, answer):
+    return bool(message and answer and _ORDER.search(message) and _OFFER.search(answer.strip()))
 
 
 # Set by the eval harness so its calls are separable from real usage.
@@ -775,6 +776,10 @@ ENGINE = "loop"
 # a TF2 search "corrected"). Kept switchable for measuring.
 VERIFY_ANSWERS = False
 
+# Builds go through johan_build's planned, checked steps. Switchable so the
+# eval can measure the plain loop against it on the same cases.
+BUILD_ENGINE = os.environ.get("JOHAN_BUILD_ENGINE", "0") != "0"   # on once the eval says so
+
 
 # Words that make it worth ASKING whether he wants deep research. Only a
 # gate for the calibrated decision below — never the decision itself (a
@@ -855,6 +860,8 @@ def run_turn(messages, max_hops=9, on_tool=None, on_delta=None,
 
     Everything the turn does in this thread — model calls, decide checks,
     tools, the answer check — is stoppable by `should_stop` (esc)."""
+    if max_hops == 9 and _llm.smart():
+        max_hops = 16      # the cap was for a 4B that looped; a smart model chains further
     with ji.stoppable(should_stop):
         try:
             return _run_turn(messages, max_hops, on_tool, on_delta,
@@ -925,7 +932,9 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
                                           should_stop=should_stop)
     start = len(messages)
     q = _last_user_message(messages)
-    report = _maybe_research(q, on_tool, on_delta, should_stop, messages)
+    # A smart model picks deep_research itself; the forced check was for a 4B
+    # that skipped it (and costs ~10 s of checks on a llama.cpp model).
+    report = None if _llm.smart() else _maybe_research(q, on_tool, on_delta, should_stop, messages)
     note = None
     if report is MAKE_NOTE or isinstance(report, dict):
         note = report if isinstance(report, dict) else {"role": "system", "content": MAKE_NOTE}
@@ -933,6 +942,15 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
     elif report is not None:
         messages.append({"role": "assistant", "content": report})
         return report
+    # "Make me a game / an app / a tool": code runs it in checked steps. One
+    # long reply from a 4B loses track of a whole game; a step at a time with
+    # a fresh context and real checks doesn't (johan_build.py).
+    if note is None and BUILD_ENGINE and not _is_trivial(q, messages):
+        built = _build.maybe_build(messages, q, on_tool, on_delta, should_stop)
+        if built is not None:
+            messages.append({"role": "assistant", "content": built})
+            ANSWERED_BY_CODE[:] = [True]
+            return built
     if not _is_trivial(q, messages):
         _skills.inject(messages, q)        # a matching recipe from skills/, before his message
     answer = run_turn_loop(messages, max_hops=max_hops, on_tool=on_tool,
@@ -943,7 +961,9 @@ def _run_turn(messages, max_hops, on_tool, on_delta, should_stop):
         return answer          # a question to him, not facts to verify
     # Small talk ending "code or game?" is conversation, not an ambiguous
     # request — re-asking it as options turned "good morning" into a menu.
-    if answer and not answer.startswith("(interrupted") and not _is_trivial(q, messages) \
+    # The re-ask turned a 4B's prose "X or Y?" into the ask tool; a smart
+    # model is told to use `ask` and does.
+    if answer and not _llm.smart() and not answer.startswith("(interrupted") and not _is_trivial(q, messages) \
             and not ANSWERED_BY_CODE:
         seen = {}
         asked = _plan.reask_as_tool(
@@ -983,6 +1003,7 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
     user_message = _last_user_message(messages)
     _reader.set_question(_reader.question_from(messages))   # long pages read by relevance
     seen = {}
+    nudged = False
     for hop in range(max_hops):
         # On the final hop, take the tools away and demand an answer.
         #
@@ -1029,6 +1050,10 @@ def run_turn_loop(messages, max_hops=9, on_tool=None, on_delta=None,
             return _final_answer(messages, on_delta, should_stop)
         messages.append(msg)
         calls = msg.get("tool_calls") or []
+        if not calls and not nudged and not last and _asks_instead_of_doing(user_message, msg.get("content")):
+            nudged = True
+            messages.append({"role": "system", "content": DO_IT_NOTE})
+            continue
         if not calls:
             return msg.get("content", "")
         done = []
@@ -1092,11 +1117,8 @@ def rewarm(messages):
     snapshot = copy.deepcopy(messages)
 
     def go():
-        try:
-            requests.post(OLLAMA_CHAT, timeout=180, json={
-                "model": MODEL, "messages": _attach.ollama_messages(snapshot),
-                "tools": TOOLS, "think": False, "stream": False, "keep_alive": KEEP_ALIVE,
-                "options": {"temperature": 0.3, "num_ctx": NUM_CTX, "num_predict": 1}})
+        try:   # a llama.cpp model may have to start first, hence the long wait
+            _llm.chat(_attach.ollama_messages(snapshot), tools=TOOLS, max_tokens=1, timeout=900)
         except Exception:
             pass
     threading.Thread(target=go, daemon=True).start()
@@ -1226,6 +1248,8 @@ def release_model(model=None):
     otherwise mean 3.3 GB squatting in VRAM for 20 minutes after you quit.
     Called on every exit path so "closed Johan" means "VRAM is free"."""
     model = model or MODEL
+    if _llm.is_llm(model):
+        return _llm.stop()            # llama.cpp has no unload: stop its container
     try:
         response = requests.post(OLLAMA_CHAT, timeout=20, json={
             "model": model, "messages": [], "keep_alive": 0})

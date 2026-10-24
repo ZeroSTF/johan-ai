@@ -186,18 +186,13 @@ def _score_once(question, items, context, system, images=None):
         f"{question.strip()}\n\nOptions:\n" + "\n".join(lines) + \
         "\n\nAnswer with one letter."
     import johan_interrupt as ji     # esc stops it mid-wait (see that module)
-    body = ji.ollama_post(cfg.OLLAMA_CHAT, {
-        "model": cfg.MODEL, "stream": False, "think": False,
-        # Same num_ctx and keep_alive as the chat: anything else reloads the
-        # model (measured 8-12 s) and evicts the conversation's KV cache.
-        "keep_alive": cfg.KEEP_ALIVE,
-        "logprobs": True, "top_logprobs": len(LETTERS),
-        "options": {"num_predict": 1, "temperature": 0, "num_ctx": cfg.NUM_CTX},
-        "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": prompt,
-                      **({"images": list(images)} if images else {})}],
-    }, timeout=120)
-    top = (body.get("logprobs") or [{}])[0].get("top_logprobs", [])
+    import johan_llm as llm
+    # Same server and settings as the chat: anything else reloads the model
+    # (8-12 s on Ollama) and evicts the conversation's cache.
+    r = llm.chat([{"role": "system", "content": system},
+                  {"role": "user", "content": prompt, **({"images": list(images)} if images else {})}],
+                 max_tokens=1, temperature=0, logprobs=len(LETTERS), timeout=120)
+    top = r["top_logprobs"]
     mass = [0.0] * len(items)
     for t in top:
         letter = _letter_of(t.get("token", ""))

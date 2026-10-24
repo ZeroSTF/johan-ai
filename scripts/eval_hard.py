@@ -181,6 +181,25 @@ def pytest_like(code):
     return grade
 
 
+def cli(script, runs):
+    """Run `python3 script args` in a copy of the folder; each (args, regex) must match."""
+    def grade(w, answer):
+        f = w / script
+        if not f.exists():
+            return False, f"{script} was never written"
+        tmp = Path(shutil.copytree(f.parent, w / "_grade_copy"))
+        try:
+            for args, want in runs:
+                r = subprocess.run([sys.executable, str(tmp / f.name)] + args.split(), cwd=tmp,
+                                   capture_output=True, text=True, timeout=15)
+                if want and not re.search(want, r.stdout, re.I):
+                    return False, f"`{args}` printed {r.stdout.strip()[:120]!r} {r.stderr.strip()[-120:]}"
+            return True, "ok"
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return grade
+
+
 def says(pass_re, fail_re=None):
     def grade(w, answer):
         if fail_re and re.search(fail_re, answer, re.I):
@@ -189,6 +208,10 @@ def says(pass_re, fail_re=None):
         return bool(m), (m.group(0) if m else "expected answer not found")
     return grade
 
+
+BUDGET_LEFT = ("(t => (t.includes('food') && !t.includes('rent') && /120\\.5/.test(t)) || "
+               "(t.includes('rent') && !t.includes('food') && /(^|\\D)500(\\.00?)?(\\D|$)/.test(t)))"
+               "(document.body.innerText)")
 
 CASES = [
     # --- build: hidden browser checks -------------------------------------
@@ -275,6 +298,43 @@ CASES = [
                                      ["click", "Add"]],
                     ["/(^|\\D)1(\\D|$)/.test(document.body.innerText)",
                      "!/(^|\\D)3(\\D|$)/.test(document.body.innerText)"])),
+    # --- added 2026-10-21: real projects, several parts each ---------------
+    dict(name="budget-app", group="project", files={},
+         prompt="Make me a budget tracker web app at {w}/budget/index.html: I type a "
+                "description and an amount, press Add, and it lists the entry and shows the "
+                "total of all entries. Each entry has a Delete button. The entries must still "
+                "be there after I reload the page.",
+         grade=page("budget/index.html",
+                    [["fill", 0, "rent"], ["fill", 1, "500"], ["click", "Add"],
+                     ["fill", 0, "food"], ["fill", 1, "120.5"], ["click", "Add"],
+                     ["check", "/620\\.5/.test(document.body.innerText)"],
+                     ["reload"],
+                     ["check", "document.body.innerText.includes('rent') && /620\\.5/.test(document.body.innerText)"],
+                     ["click", "Delete"], ["wait", 300]],
+                    [BUDGET_LEFT])),
+    dict(name="breakout", group="project", files={},
+         prompt="Make me a breakout game at {w}/breakout/index.html: a paddle I move with the "
+                "left and right arrow keys, a ball that bounces off the walls, the paddle and "
+                "the bricks, bricks that disappear when the ball hits them, the score in a text "
+                "element above the canvas as 'Score: N', and a 'Game Over' text when the ball "
+                "falls past the paddle. Space starts the game.",
+         grade=page("breakout/index.html",
+                    [["shot", "a"], ["press", "Space"], ["wait", 400], ["shot", "b"],
+                     ["hold", "ArrowLeft", 600], ["shot", "c"], ["hold", "ArrowRight", 600],
+                     ["shot", "d"], ["wait", 7000], ["wait", 7000]],
+                    ["shots.a !== shots.b", "shots.b !== shots.c", "shots.c !== shots.d",
+                     "/score:?\\s*[1-9]|game\\s*over/i.test(document.body.innerText)"])),
+    dict(name="expense-cli", group="project", files={},
+         prompt="Make me a command-line expense tracker at {w}/expenses/expenses.py: "
+                "`python3 expenses.py add 12.50 food` saves an expense, `python3 expenses.py "
+                "list` prints all of them, `python3 expenses.py total` prints the total, and "
+                "`python3 expenses.py total food` prints the total for one category. Keep the "
+                "data in a JSON file next to the script.",
+         grade=cli("expenses/expenses.py",
+                   [("add 12.50 food", None), ("add 7.25 food", None), ("add 30 rent", None),
+                    ("list", r"food[\s\S]*rent|rent[\s\S]*food"),
+                    ("total", r"(^|[^\d.])49\.750?(?!\d)"), ("total food", r"(^|[^\d.])19\.750?(?!\d)"),
+                    ("total rent", r"(^|[^\d.])30(\.0+)?(?![\d.])")])),
     dict(name="fix-pagination", group="edit", files={"paging.py": PAGINATE},
          prompt="In {w}/paging.py, page 1 shows the second page of results, and page_count "
                 "misses the last partial page. Fix both.",
@@ -335,6 +395,11 @@ def approver_for(w):
     home = str(Path.home())
 
     def decide(kind, item):
+        if kind == "build":
+            f = os.path.realpath(str(item.get("folder", "")))
+            ok = f == str(w) or f.startswith(str(w) + "/")
+            return {"choice": "yes" if ok else "no",
+                    "reason": "" if ok else f"(test) only build inside {w}"}
         if kind != "action":
             target = os.path.realpath(os.path.expanduser(str(item.get("path", ""))))
             ok = target.startswith(str(w) + "/")
@@ -387,7 +452,7 @@ def main():
     ap.add_argument("--only")
     ap.add_argument("--repeats", type=int, default=3)
     args = ap.parse_args()
-    cases = [c for c in CASES if not args.only or c["group"] == args.only]
+    cases = [c for c in CASES if not args.only or c["group"] in args.only.split(",") or c["name"] in args.only.split(",")]
     run_id = f"hard-{ja.MODEL}-{datetime.now():%Y%m%d-%H%M%S}"
     ja.EVAL_RUN = run_id
     import johan_tools as jt

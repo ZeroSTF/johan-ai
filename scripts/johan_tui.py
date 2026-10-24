@@ -218,6 +218,7 @@ VERBS = {
     "propose_action": "asking to change something", "propose_edit": "asking to edit a file",
     "web_search": "searching the web", "fetch_page": "reading a page",
     "try_page": "trying it in a browser", "try_code": "running the code",
+    "build_step": "building", "build_done": "trying it in a browser",
     "wikipedia": "checking Wikipedia", "latest_version": "checking versions",
     "run_command": "running a command",
     "system_status": "checking the machine", "project_files": "reading files", "files": "reading files",
@@ -657,6 +658,12 @@ class TryCard(Vertical):
             img.styles.height = 14
             img.styles.width = "auto"
             yield img
+        if r.get("caption"):           # a build: the checks' verdict, not try_page's
+            ok = r.get("problems") == ["none found"]
+            yield Static(mk("[$text-muted]built and checked in a browser · "
+                            + ("[$success]$c[/]" if ok else "[$warning]$c[/]")
+                            + " · ctrl+o opens it[/]", c=r["caption"]), classes="imagecap")
+            return
         errs = len(r.get("errors") or []) + len(r.get("console_errors") or [])
         moves = "moves" if r.get("moves_by_itself") else "still"
         keys = {True: " · keys changed it", False: " · keys changed nothing"}.get(
@@ -1642,12 +1649,10 @@ class JohanApp(App):
         msgs = list(self.messages or [])[:1] or [
             {"role": "system", "content": ja.prime_with_memories(ja.SYSTEM_PROMPT)}]
         try:
-            response = requests.post("http://127.0.0.1:11434/api/chat", timeout=180, json={
-                "model": model, "messages": msgs + [{"role": "user", "content": "hi"}],
-                "tools": ja.TOOLS, "think": False, "stream": False,
-                "keep_alive": ja.KEEP_ALIVE,
-                "options": {"temperature": 0.3, "num_ctx": ja.NUM_CTX, "num_predict": 1}})
-            response.raise_for_status()
+            if ja._llm.is_llm(model):         # a llama.cpp model: start its container first
+                self.call_from_thread(self._set_status, mk("loading $m…", m=model))
+            ja._llm.chat(msgs + [{"role": "user", "content": "hi"}], model=model,
+                         tools=ja.TOOLS, max_tokens=1, timeout=900)
             self.call_from_thread(self._set_status, None)
             self.call_from_thread(self._refresh_sidebar)
             # Ollama can finish the chat response just before /api/ps exposes
@@ -2253,7 +2258,7 @@ class JohanApp(App):
             self.call_from_thread(setattr, self, "busy_label", tool_word(name))
             if name == "generate_image" and isinstance(result, dict) and result.get("path"):
                 self.call_from_thread(self._show_image, result)
-            if name == "try_page" and isinstance(result, dict) and result.get("screenshots"):
+            if name in ("try_page", "build_done") and isinstance(result, dict) and result.get("screenshots"):
                 self.call_from_thread(self._show_try, result)
             if name == "find_images" and isinstance(result, dict) and result.get("pictures"):
                 self.call_from_thread(self._show_webpics, result)

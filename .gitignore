@@ -36,3 +36,15 @@ __pycache__/
 
 # skill vector cache (johan_skills.py rebuilds it)
 /skills/.index.json
+/config/default-model
+# llama.cpp: binaries, JIT kernel cache, downloads, logs (models are *.gguf)
+/llamacpp/cuda/
+/llamacpp/vulkan/
+/llamacpp/cuda-cache/
+/llamacpp/models/
+/llamacpp/*.tar.gz
+/llamacpp/*.log
+/llamacpp/results-moe.jsonl
+
+# personal: who he is, for OpenCode (stays local)
+/opencode/AGENTS.md

@@ -80,6 +80,13 @@ def ollama_lines(url, payload, idle_timeout=180):
     Raises Interrupted if a stop is requested while waiting, and
     TimeoutError after `idle_timeout` seconds with nothing received — the
     same per-read semantics `requests`' timeout had."""
+    for line in _raw_lines(url, payload, idle_timeout):
+        yield json.loads(line)
+
+
+def _raw_lines(url, payload, idle_timeout):
+    """The HTTP itself, in a helper thread, polling the stop signal: yields
+    each non-empty line of the response body as bytes."""
     u = urlsplit(url)
     conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=idle_timeout)
     q = queue.Queue()
@@ -117,7 +124,7 @@ def ollama_lines(url, payload, idle_timeout=180):
                 continue
             last = time.monotonic()
             if kind == "line":
-                yield json.loads(val)
+                yield val
             elif kind == "end":
                 return
             else:

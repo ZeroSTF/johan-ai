@@ -3,7 +3,8 @@
 Runs in ~/johan/venv-browser (Playwright). eval_hard.py calls it with one
 JSON argument {"path", "steps": [...], "checks": [...]}; prints one JSON line
 {"passed": bool, "details": [...]}. Steps: ["click", text] | ["press", key]
-| ["fill", n, value] (n-th input/textarea) | ["wait", ms] | ["shot", name].
+| ["fill", n, value] (n-th input/textarea) | ["wait", ms] | ["shot", name]
+| ["hold", key, ms] | ["reload"] | ["check", js] (a check in the middle).
 Checks are JS expressions returning true/false; `shots[name]` holds earlier
 canvas data URLs so a check can ask "did the canvas change?".
 """
@@ -28,6 +29,7 @@ def main():
         p.wait_for_timeout(500)
         p.evaluate("window.__shots = {}")
         p.mouse.click(3, 3)
+        mid_ok = True
         for st in job.get("steps", []):
             try:
                 if st[0] == "click":
@@ -36,6 +38,19 @@ def main():
                     p.keyboard.press(st[1])
                 elif st[0] == "fill":
                     p.locator("input, textarea").nth(st[1]).fill(str(st[2]), timeout=2000)
+                elif st[0] == "hold":
+                    p.keyboard.down(st[1])
+                    p.wait_for_timeout(st[2])
+                    p.keyboard.up(st[1])
+                elif st[0] == "reload":
+                    kept = p.evaluate("window.__shots || {}")
+                    p.reload(wait_until="load")
+                    p.wait_for_timeout(500)
+                    p.evaluate("s => { window.__shots = s }", kept)
+                elif st[0] == "check":
+                    r = bool(p.evaluate(f"(() => {{ const shots = window.__shots; return ({st[1]}); }})()"))
+                    out["details"].append(f"{'ok' if r else 'FAIL'}: {st[1][:90]}")
+                    mid_ok = mid_ok and r
                 elif st[0] == "wait":
                     p.wait_for_timeout(st[1])
                 elif st[0] == "shot":
@@ -45,7 +60,7 @@ def main():
                 p.wait_for_timeout(120)
             except Exception as e:
                 out["details"].append(f"step {st}: {type(e).__name__}")
-        ok = True
+        ok = mid_ok
         for chk in job.get("checks", []):
             try:
                 r = bool(p.evaluate(f"(() => {{ const shots = window.__shots; return ({chk}); }})()"))

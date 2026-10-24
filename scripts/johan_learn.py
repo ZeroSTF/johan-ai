@@ -126,14 +126,9 @@ def write_rule(prev_answer, message):
     ja = _engine()
     try:
         import johan_interrupt as ji     # esc stops it mid-wait
-        body = ji.ollama_post(ja.OLLAMA_CHAT, {
-            "model": ja.MODEL, "think": False,
-            "keep_alive": ja.KEEP_ALIVE, "format": _SCHEMA,
-            # Same num_ctx as the chat — anything else reloads the model.
-            "options": {"temperature": 0, "num_ctx": ja.NUM_CTX, "num_predict": 80},
-            "messages": [{"role": "user", "content":
-                          _WRITE_PROMPT + _context(prev_answer, message)}],
-        }, timeout=60)
+        import johan_llm as llm
+        body = llm.chat([{"role": "user", "content": _WRITE_PROMPT + _context(prev_answer, message)}],
+                        schema=_SCHEMA, max_tokens=80, temperature=0, timeout=60)
         out = json.loads(body["message"]["content"])
     except Exception:
         return None

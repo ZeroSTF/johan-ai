@@ -243,6 +243,9 @@ def prefilter(text):
         return False
     if _WRITING.search(t.split(":")[0]):
         return False
+    import johan_build as jb
+    if jb.MAKE_VERB.search(t) and jb.THING.search(t):
+        return False          # a build: johan_build plans it, with real checks per step
     if _BIG.search(t):
         return True
     change = {m.group(1).lower() for m in _CHANGE.finditer(t)}
@@ -352,14 +355,10 @@ def _plan_call(messages, cfg):
     keep_alive as call_model, so the conversation's cached prefix is reused;
     `format` turns tool calling off and forces the plan schema."""
     names = [t["function"]["name"] for t in cfg.TOOLS]
-    import johan_interrupt as ji     # esc stops it mid-wait
-    body = ji.ollama_post(cfg.OLLAMA_CHAT, {
-        "model": cfg.MODEL, "messages": _with_images(messages), "tools": cfg.TOOLS,
-        "format": plan_schema(names), "think": False,
-        "keep_alive": cfg.KEEP_ALIVE,
-        "options": {"temperature": 0, "num_ctx": cfg.NUM_CTX, "num_predict": 400}},
-        timeout=120)
-    return (body.get("message") or {}).get("content") or ""
+    import johan_llm as llm          # esc stops it mid-wait
+    r = llm.chat(_with_images(messages), model=cfg.MODEL, tools=cfg.TOOLS,
+                 schema=plan_schema(names), max_tokens=400, temperature=0, timeout=120)
+    return r["message"].get("content") or ""
 
 
 def make_plan(messages, changes=None, cfg=None, call=None):

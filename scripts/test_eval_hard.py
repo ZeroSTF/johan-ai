@@ -13,6 +13,29 @@ GOOD.update({
  "converter": ("convert.html", "<html><body><input id=c type=number><button onclick=\"o.textContent=(c.value*9/5+32)\">Convert</button><p id=o></p></body></html>"),
  "counter-then-reset": ("counter.html", "<html><body><span id=n>0</span><button onclick=\"n.textContent=+n.textContent+1\">Add</button><button onclick=\"n.textContent=0\">Reset</button></body></html>"),
 })
+BUDGET = """<html><body><input id=d><input id=a type=number><button id=add>Add</button><ul id=l></ul><p>Total: <span id=t>0</span></p>
+<script>let E=JSON.parse(localStorage.getItem('e')||'[]');function draw(){l.innerHTML='';let s=0;E.forEach((e,i)=>{s+=e.a;let li=document.createElement('li');li.textContent=e.d+' '+e.a+' ';let b=document.createElement('button');b.textContent='Delete';b.onclick=()=>{E.splice(i,1);save()};li.append(b);l.append(li)});t.textContent=s}
+function save(){localStorage.setItem('e',JSON.stringify(E));draw()}add.onclick=()=>{E.push({d:d.value,a:+a.value});save()};draw()</script></body></html>"""
+BREAKOUT = """<html><body><p id=s>Score: 0</p><p id=g></p><canvas id=c width=300 height=200></canvas><script>
+const x=c.getContext('2d');let px=120,bx=150,by=150,vx=3,vy=-3,run=false,score=0,bricks=[];for(let i=0;i<6;i++)bricks.push({x:i*50,y:10,on:true});
+document.onkeydown=e=>{if(e.code==='Space')run=true;if(e.key==='ArrowLeft')px-=12;if(e.key==='ArrowRight')px+=12};
+function f(){if(run){bx+=vx;by+=vy;if(bx<0||bx>300)vx=-vx;if(by<0)vy=-vy;bricks.forEach(b=>{if(b.on&&bx>b.x&&bx<b.x+48&&by<20){b.on=false;vy=-vy;score++;s.textContent='Score: '+score}});
+if(by>185&&bx>px&&bx<px+60)vy=-vy;if(by>200){run=false;g.textContent='Game Over'}}
+x.fillStyle='#000';x.fillRect(0,0,300,200);x.fillStyle='#fff';x.fillRect(px,188,60,6);x.fillRect(bx,by,5,5);bricks.forEach(b=>b.on&&x.fillRect(b.x,10,48,8));requestAnimationFrame(f)}f()</script></body></html>"""
+EXPENSES = """import json, sys
+from pathlib import Path
+F = Path(__file__).with_name("expenses.json")
+data = json.loads(F.read_text()) if F.exists() else []
+cmd = sys.argv[1:]
+if cmd[0] == "add":
+    data.append({"amount": float(cmd[1]), "category": cmd[2]}); F.write_text(json.dumps(data))
+elif cmd[0] == "list":
+    for e in data: print(e["amount"], e["category"])
+elif cmd[0] == "total":
+    print(f"{sum(e['amount'] for e in data if len(cmd) < 2 or e['category'] == cmd[1]):.2f}")
+"""
+GOOD.update({"budget-app": ("budget/index.html", BUDGET), "breakout": ("breakout/index.html", BREAKOUT),
+             "expense-cli": ("expenses/expenses.py", EXPENSES)})
 EDITS = {
  "no-negative-stock": {"inventory.py": eh.INVENTORY.replace("    STOCK[name] = STOCK.get(name, 0) - qty", "    if qty > STOCK.get(name, 0):\n        raise ValueError(name)\n    STOCK[name] = STOCK.get(name, 0) - qty")},
  "most-valuable": {"inventory.py": eh.INVENTORY + "\n\ndef most_valuable():\n    return max(STOCK, key=lambda n: STOCK[n]*PRICES[n]) if STOCK else None\n"},
@@ -39,7 +62,9 @@ for c in eh.CASES:
             (w / rel).parent.mkdir(parents=True, exist_ok=True); (w / rel).write_text(t)
         ans = ""
         if label == "good":
-            if c["name"] in GOOD: (w / GOOD[c["name"]][0]).write_text(GOOD[c["name"]][1])
+            if c["name"] in GOOD:
+                (w / GOOD[c["name"]][0]).parent.mkdir(parents=True, exist_ok=True)
+                (w / GOOD[c["name"]][0]).write_text(GOOD[c["name"]][1])
             for rel, t in EDITS.get(c["name"], {}).items(): (w / rel).write_text(t)
             ans = ANS.get(c["name"], ("",))[0]
         else:

@@ -78,7 +78,9 @@ async def run(draw=True):
         print("startup")
         check("welcome card on an empty chat", app.query(tui.Welcome))
         check("prompt has focus", app.query_one("#prompt").has_focus)
-        warm = await wait_until(pilot, lambda: "ready" in str(app.query_one("#status").render()), 60)
+        # A llama.cpp MoE loads (~20 s) and reads the setup prompt (~60 s) on a cold start.
+        warm = await wait_until(pilot, lambda: "ready" in str(app.query_one("#status").render()),
+                                240 if ja._llm.is_llm(ja.MODEL) else 60)
         check("model warms up and status says ready", warm)
         shot("01-home")
 

@@ -4,6 +4,10 @@ no DB writes, nothing written under ~/johan.
     python test_plan.py
 """
 import json
+import os
+# These test the 4B (Ollama) path and the 4B-only crutches a smart model skips;
+# config/default-model now says qwen36.
+os.environ["JOHAN_MODEL"] = "johan-agent"
 import sys
 from pathlib import Path
 from types import SimpleNamespace

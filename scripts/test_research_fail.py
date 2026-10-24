@@ -7,6 +7,10 @@ from memory." Both are pinned here.
 
     python test_research_fail.py
 """
+import os
+# These test the 4B (Ollama) path and the 4B-only crutches a smart model skips;
+# config/default-model now says qwen36.
+os.environ["JOHAN_MODEL"] = "johan-agent"
 import sys
 from pathlib import Path
 
