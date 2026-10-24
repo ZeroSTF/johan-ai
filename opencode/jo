@@ -13,6 +13,9 @@ PY="$HOME/johan/venv-embed/bin/python3"
 LLM="$HOME/johan/scripts/johan_llm.py"
 export PATH="$HOME/.nvm/versions/node/v24.18.0/bin:$PATH"
 export OPENCODE_DISABLE_MODELS_FETCH=1
+# Without an AGENTS.md OpenCode reads a folder's CLAUDE.md; ~/johan's is ~45k
+# tokens, past the 32k context, so opening jo there went straight to compaction.
+export OPENCODE_DISABLE_CLAUDE_CODE=1
 
 if ! "$PY" "$LLM" status | grep -q '"up": true'; then
     echo "jo: starting the model (about 20 s)…" >&2

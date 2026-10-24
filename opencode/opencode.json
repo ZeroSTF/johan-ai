@@ -36,5 +36,10 @@
       "enabled": true,
       "timeout": 600000
     }
+  },
+  "agent": {
+    "title": {
+      "disable": true
+    }
   }
 }
