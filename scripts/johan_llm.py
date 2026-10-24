@@ -167,6 +167,11 @@ def _start(model, wait, should_stop):
            # OpenCode's title request in parallel — 2.5 min to answer "hi".
            # OpenCode's title request is switched off in its config instead.
            "-fa", "on", "-ctk", "q8_0", "-ctv", "q8_0", "--jinja", "-t", "8", "-np", "1",
+           # Read prompts 1024 tokens at a time (default 512): 102 -> 152 tok/s
+           # measured 2026-10-24 (llama-bench pp4096), writing unchanged. 2048
+           # needs a 2 GB compute buffer that only fits with more experts in
+           # RAM (172-179 tok/s, but writing drops to ~24 and RAM gets tight).
+           "-b", "2048", "-ub", "1024",
            # The prompt cache lives in RAM, 8 GB by default — a long build
            # filled it and the PC ran out of memory. 2 GB keeps new chats fast.
            "--cache-ram", "2048",
