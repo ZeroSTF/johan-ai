@@ -144,14 +144,14 @@ jl.running = lambda timeout=2: state["up_at"] is not None and _t.monotonic() > s
 
 def _fake_run(cmd, **k):
     calls.append("docker run")
-    state.update(served="qwen36", up_at=_t.monotonic() + 1.0)
+    state.update(served="groot", up_at=_t.monotonic() + 1.0)
     return type("R", (), {"returncode": 0, "stderr": ""})()
 
 
 jl.subprocess.run = _fake_run
 jl.stop = lambda: calls.append("stop") or state.update(served=None, up_at=None) or True
 try:
-    ts = [_th.Thread(target=jl.start, args=("qwen36",)) for _ in range(2)]
+    ts = [_th.Thread(target=jl.start, args=("groot",)) for _ in range(2)]
     [t.start() for t in ts]
     [t.join(10) for t in ts]
     check("two starters at once: one docker run, no stop, model up",

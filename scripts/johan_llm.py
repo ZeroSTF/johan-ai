@@ -38,14 +38,11 @@ BASE = f"http://127.0.0.1:{PORT}"
 BUILD = LLAMA / "cuda/llama-b11829"
 
 MODELS = {
-    # n_cpu_moe 34: 4.5 GB VRAM. 32 measured slightly faster but left ~0.8 GB
-    # for the desktop and a browser — too tight. 26 didn't fit at all.
-    "qwen36": {"gguf": "Qwen3.6-35B-A3B-APEX-I-Mini.gguf", "mmproj": "mmproj.gguf",
-               "n_cpu_moe": 34, "smart": True},
     # The default since 2026-11-01: Groot 19B-A3B, Qwen3.6-35B-A3B cut to 128
     # experts. Hard cases 8/8 vs 7/8, quiz 15/15 vs 14/15, reads prompts at
     # ~210 tok/s vs 152, writes the same ~27. n_cpu_moe 26: 4.7 GB VRAM; 22
     # didn't fit. Same vision projector as the 35B. Thinking on scored worse.
+    # Replaced Qwen3.6-35B-A3B ("qwen36", deleted 2026-11-01; name kept as an alias).
     # Template: the 35B file's (templates/qwen36.jinja) — Groot ships the stock
     # Qwen one, which refuses OpenCode's two system messages and jo's warm-up
     # (a prompt with no user message yet).
@@ -63,7 +60,7 @@ MODELS = {
                 "mmproj": "mmproj-qwen3.5-4b-uncensored.gguf", "template": "qwen35u.jinja"},
 }
 # Old Ollama names still found in configs, sessions and environment variables.
-ALIASES = {"johan-extract": "granite", "johan-uncensored": "qwen35u"}
+ALIASES = {"johan-extract": "granite", "johan-uncensored": "qwen35u", "qwen36": "groot"}
 
 # johan-pause (GameMode) creates this and johan-resume removes it: while it
 # exists nothing may start a model, or the next chat or /refresh step would
