@@ -67,7 +67,7 @@ def _default_model():
         name = (Path.home() / "johan/config/default-model").read_text().strip()
     except OSError:
         name = ""
-    return _llm.name_of(os.environ.get("JOHAN_MODEL") or name or "qwen36")
+    return _llm.name_of(os.environ.get("JOHAN_MODEL") or name or "groot")
 
 
 MODEL = _default_model()

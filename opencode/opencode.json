@@ -3,13 +3,13 @@
   "provider": {
     "llama.cpp": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Johan's 35B (local llama.cpp)",
+      "name": "Johan's local model (llama.cpp)",
       "options": {
         "baseURL": "http://127.0.0.1:8092/v1"
       },
       "models": {
-        "qwen36": {
-          "name": "Qwen3.6-35B-A3B",
+        "groot": {
+          "name": "Groot-19B-A3B",
           "limit": {
             "context": 32768,
             "output": 8192
@@ -18,8 +18,8 @@
       }
     }
   },
-  "model": "llama.cpp/qwen36",
-  "small_model": "llama.cpp/qwen36",
+  "model": "llama.cpp/groot",
+  "small_model": "llama.cpp/groot",
   "share": "disabled",
   "autoupdate": false,
   "compaction": {

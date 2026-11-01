@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# jo — Johan in OpenCode: start the local 35B, open OpenCode, unload the model on exit.
+# jo — Johan in OpenCode: start the local model, open OpenCode, unload the model on exit.
 #
 #   jo                 the OpenCode interface
 #   jo run "question"  one-shot answer
@@ -19,7 +19,7 @@ export OPENCODE_DISABLE_CLAUDE_CODE=1
 
 if ! "$PY" "$LLM" status | grep -q '"up": true'; then
     echo "jo: starting the model (about 20 s)…" >&2
-    if ! "$PY" "$LLM" start qwen36 >/dev/null; then
+    if ! "$PY" "$LLM" start groot >/dev/null; then
         echo "jo: the model didn't start — is Johan paused (GameMode)? try johan-resume" >&2
         exit 1
     fi

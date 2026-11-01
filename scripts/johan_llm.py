@@ -42,6 +42,15 @@ MODELS = {
     # for the desktop and a browser — too tight. 26 didn't fit at all.
     "qwen36": {"gguf": "Qwen3.6-35B-A3B-APEX-I-Mini.gguf", "mmproj": "mmproj.gguf",
                "n_cpu_moe": 34, "smart": True},
+    # The default since 2026-11-01: Groot 19B-A3B, Qwen3.6-35B-A3B cut to 128
+    # experts. Hard cases 8/8 vs 7/8, quiz 15/15 vs 14/15, reads prompts at
+    # ~210 tok/s vs 152, writes the same ~27. n_cpu_moe 26: 4.7 GB VRAM; 22
+    # didn't fit. Same vision projector as the 35B. Thinking on scored worse.
+    # Template: the 35B file's (templates/qwen36.jinja) — Groot ships the stock
+    # Qwen one, which refuses OpenCode's two system messages and jo's warm-up
+    # (a prompt with no user message yet).
+    "groot": {"gguf": "Groot-19B-A3B-261023.APEX-I-MiniPlus-V2.1.gguf", "mmproj": "mmproj.gguf",
+              "n_cpu_moe": 26, "smart": True, "template": "qwen36.jinja"},
     # Stage 2's fact extractor (granite 4.1 3B, was Ollama's johan-extract):
     # small and dense, all on the GPU; postings are cut to fit 8K.
     "granite": {"gguf": "granite-4.1-3b.gguf", "ctx": 8192},
@@ -408,7 +417,7 @@ def chat(messages, *, model=None, tools=None, schema=None, stream=False, on_delt
 
 def _request(messages, tools, schema, stream, max_tokens, temperature, logprobs, seed=None):
     return to_openai({"messages": messages, "tools": tools, "format": schema, "stream": stream,
-                      "think": False, "logprobs": bool(logprobs), "top_logprobs": logprobs,
+                      "think": os.environ.get("JOHAN_THINK") == "1", "logprobs": bool(logprobs), "top_logprobs": logprobs,
                       "options": {"temperature": temperature,
                                   **({"num_predict": max_tokens} if max_tokens else {}),
                                   **({"seed": seed} if seed is not None else {})}})
@@ -429,7 +438,7 @@ if __name__ == "__main__":
     import sys
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
     if cmd == "start":
-        print(start(sys.argv[2] if len(sys.argv) > 2 else "qwen36"))
+        print(start(sys.argv[2] if len(sys.argv) > 2 else "groot"))
     elif cmd == "stop":
         print(stop())
     else:

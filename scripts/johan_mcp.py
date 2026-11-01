@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-os.environ.setdefault("JOHAN_MODEL", "qwen36")
+os.environ.setdefault("JOHAN_MODEL", "groot")
 
 import anyio                                 # noqa: E402
 import mcp.types as mt                       # noqa: E402

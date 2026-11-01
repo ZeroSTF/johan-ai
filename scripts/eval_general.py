@@ -37,6 +37,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 import johan_assistant as ja      # noqa: E402
+import johan_llm                  # noqa: E402
 
 OUT = ja.ROOT / "logs/eval-general"
 REPEATS = 3
@@ -265,14 +266,13 @@ def ask(model, case, seed):
     msgs = [{"role": "system", "content": SYSTEM}] + [dict(m) for m in msgs]
     if case.get("images"):
         msgs[-1]["images"] = case["images"]
-    r = requests.post(ja.OLLAMA_CHAT, timeout=300, json={
-        "model": model, "messages": msgs, "stream": False, "think": False,
-        "keep_alive": "5m",
-        "options": {"temperature": 0.3, "num_ctx": ja.NUM_CTX, "seed": seed}})
-    if r.status_code != 200:
-        return f"[error {r.status_code}: {r.text[:200]}]", {}
-    b = r.json()
-    return b["message"].get("content", ""), b
+    t = time.monotonic()
+    try:
+        r = johan_llm.chat(msgs, model=model, temperature=0.3, seed=seed, timeout=300)
+    except Exception as e:
+        return f"[error: {e}]", {}
+    return r["message"].get("content", ""), {"eval_count": r["completion_tokens"],
+                                              "eval_duration": int((time.monotonic() - t) * 1e9)}
 
 
 def run(model, only=None, repeats=REPEATS):
