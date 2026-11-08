@@ -6,7 +6,7 @@ before the first word. The text is identical between sessions except an <env>
 block (working folder, is-it-a-git-repo, today's date; measured 2026-10-24).
 
 So `jo` runs this in the background, from the same folder, while the UI opens:
-  1. a dry run of `opencode run` against a fake server (capture_proxy.py) —
+  1. a dry run of `opencode serve` + one message against a fake server (capture_proxy.py) —
      no model, ~10-20 s — records the EXACT request OpenCode will send from
      this folder today;
   2. that request's system prompt + tools (no user message) goes to the real
@@ -16,8 +16,8 @@ So `jo` runs this in the background, from the same folder, while the UI opens:
   3. that read is saved to disk (llamacpp/slots, ~300 MB); the next jo from
      the same folder loads it in ~5 s instead of re-reading (~60 s), as long as
      the prompt is unchanged (date, config, AGENTS.md).
-`opencode run` gets an empty stdin: it reads a non-terminal stdin to the end,
-so an open one hung the dry run until the 180 s timeout.
+The dry run gets an empty stdin: `opencode run` read a non-terminal stdin to
+the end, so an open one hung it until the 180 s timeout.
 The dry run uses throwaway data/state dirs, so it never shows up in his
 OpenCode session list; config and AGENTS.md are the real ones (they're part
 of the prompt).
@@ -73,8 +73,25 @@ def capture(cwd):
                     break
             except requests.RequestException:
                 time.sleep(0.25)
-        subprocess.run(["opencode", "run", "x"], cwd=cwd, env=env, timeout=180, stdin=subprocess.DEVNULL,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # `opencode serve`, not `opencode run`: run leaves out the `question` tool
+        # (nobody can answer it), so its request differed from the interface's at
+        # 43% and his first message re-read ~5,400 tokens (2026-11-08).
+        sp = free_port()
+        srv = subprocess.Popen(["opencode", "serve", "--port", str(sp)], cwd=cwd, env=env,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            api, q = f"http://127.0.0.1:{sp}", {"directory": cwd}
+            for _ in range(240):
+                try:
+                    requests.get(f"{api}/path", params=q, timeout=1)
+                    break
+                except requests.RequestException:
+                    time.sleep(0.25)
+            sid = requests.post(f"{api}/session", params=q, json={}, timeout=30).json()["id"]
+            requests.post(f"{api}/session/{sid}/message", params=q, timeout=60,
+                          json={"parts": [{"type": "text", "text": "x"}]})
+        finally:
+            srv.kill()
         for f in sorted((tmp / "req").glob("*.json")):
             body = json.loads(f.read_text())
             if body.get("tools"):
