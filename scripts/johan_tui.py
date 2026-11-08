@@ -275,6 +275,10 @@ def _clip(text, n):
     return text if len(text) <= n else text[:max(1, n - 1)].rstrip() + "…"
 
 
+# What the sidebar calls each johan_llm model (≤ 13 chars, "…" marks loading).
+MODEL_LABELS = {"groot": "groot", "qwen35u": "uncensored 4B", "granite": "granite (jobs)"}
+
+
 # ================================================================ sidebar
 
 class Panel(Static):
@@ -389,6 +393,11 @@ class Sidebar(Vertical):
                     self._row("[$text-muted]VRAM[/]", f"{used / 1024:.1f} / {total / 1024:.1f} GB")]
         loaded = s.get("models_loaded")
         model = loaded[0] if isinstance(loaded, list) and loaded else None
+        if model:
+            # "qwen35u (llama.cpp, loading)" was clipped to "qwen35u (llama.." —
+            # the backend says nothing to him, and the internal name little.
+            name = model.split(" (")[0]
+            model = MODEL_LABELS.get(name, name) + (" …" if "loading" in model else "")
         out.append(self._row("[$text-muted]model[/]", _clip(model, 15) if model
                              else "[$text-muted]unloaded[/]"))
         disk = s.get("disk", {})
