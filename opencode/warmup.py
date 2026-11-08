@@ -13,12 +13,18 @@ So `jo` runs this in the background, from the same folder, while the UI opens:
      llama-server with max_tokens 1, so the model has read everything up to
      his first message when he sends it. If he types first, his request waits
      for the read to finish — never slower than without this.
+  3. that read is saved to disk (llamacpp/slots, ~300 MB); the next jo from
+     the same folder loads it in ~5 s instead of re-reading (~60 s), as long as
+     the prompt is unchanged (date, config, AGENTS.md).
+`opencode run` gets an empty stdin: it reads a non-terminal stdin to the end,
+so an open one hung the dry run until the 180 s timeout.
 The dry run uses throwaway data/state dirs, so it never shows up in his
 OpenCode session list; config and AGENTS.md are the real ones (they're part
 of the prompt).
 
     python warmup.py            # from the folder `jo` runs in
 """
+import hashlib
 import json
 import os
 import shutil
@@ -36,6 +42,10 @@ NODE = HOME / ".nvm/versions/node/v24.18.0/bin"
 PROXY = HOME / "johan/llamacpp/capture_proxy.py"
 PY = HOME / "johan/venv-embed/bin/python3"
 LLM = "http://127.0.0.1:8092"
+# The model's memory of a read prompt is saved here (llama-server --slot-save-path,
+# mounted at /slots). One file per folder; a sidecar holds a hash of the prompt it
+# holds, because the prompt changes with the date and OpenCode's config.
+SLOTS = HOME / "johan/llamacpp/slots"
 
 
 def free_port():
@@ -63,7 +73,7 @@ def capture(cwd):
                     break
             except requests.RequestException:
                 time.sleep(0.25)
-        subprocess.run(["opencode", "run", "x"], cwd=cwd, env=env, timeout=180,
+        subprocess.run(["opencode", "run", "x"], cwd=cwd, env=env, timeout=180, stdin=subprocess.DEVNULL,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for f in sorted((tmp / "req").glob("*.json")):
             body = json.loads(f.read_text())
@@ -84,9 +94,27 @@ def main():
     system = [m for m in body["messages"] if m.get("role") == "system"]
     req = {"messages": system, "tools": body["tools"], "tool_choice": body.get("tool_choice", "auto"),
            "max_tokens": 1, "stream": False, "cache_prompt": True}
+    key = hashlib.sha256(json.dumps(req, sort_keys=True).encode()).hexdigest()[:16]
+    name = "jo-" + hashlib.sha256(os.getcwd().encode()).hexdigest()[:12]
+    saved, sidecar = SLOTS / f"{name}.bin", SLOTS / f"{name}.key"
+    restored = False
+    if saved.exists() and sidecar.exists() and sidecar.read_text().strip() == key:
+        try:
+            restored = requests.post(f"{LLM}/slots/0?action=restore", json={"filename": f"{name}.bin"},
+                                     timeout=120).ok
+        except requests.RequestException:
+            pass
+    t1 = time.monotonic()
     r = requests.post(f"{LLM}/v1/chat/completions", json=req, timeout=900)
     t = (r.json().get("timings") or {}) if r.ok else {}
-    print(f"warmup: read {t.get('prompt_n', '?')} tokens in {time.monotonic() - t0:.0f} s", file=sys.stderr)
+    print(f"warmup: {'restored, ' if restored else ''}read {t.get('prompt_n', '?')} tokens in "
+          f"{time.monotonic() - t1:.0f} s ({time.monotonic() - t0:.0f} s total)", file=sys.stderr)
+    if r.ok and not restored:
+        try:
+            if requests.post(f"{LLM}/slots/0?action=save", json={"filename": f"{name}.bin"}, timeout=120).ok:
+                sidecar.write_text(key)
+        except requests.RequestException:
+            pass
     return 0
 
 

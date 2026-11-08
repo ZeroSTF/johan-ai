@@ -166,6 +166,8 @@ def _start(model, wait, should_stop):
            "-v", f"{L}/libgomp.so.1:{L}/libgomp.so.1:ro",
            "-v", f"{BUILD}:/llama:ro", "-v", f"{NV}:/nv:ro", "-v", f"{LLAMA / 'models'}:/models:ro",
            "-v", f"{LLAMA / 'templates'}:/templates:ro",
+           # jo's warmed-up prompt, saved so the next jo loads it instead of re-reading it
+           "-v", f"{LLAMA / 'slots'}:/slots",
            # the card has no precompiled kernels in the release: the driver
            # JIT-compiles them once (~75 s) and keeps them here
            "-v", f"{LLAMA / 'cuda-cache'}:/cache",
@@ -188,6 +190,9 @@ def _start(model, wait, should_stop):
            # Thinking off for every client (Johan asks per request; outside
            # agents like OpenCode don't): at ~28 tok/s it doubles a reply.
            "--chat-template-kwargs", '{"enable_thinking": false}',
+           "--slot-save-path", "/slots",
+           # Not --moe-cache-mib (keeps hot experts on the GPU): measured 2026-11-08,
+           # writing 27 tok/s without it, 16 at 256 MiB, 24 at 512.
            "--host", "127.0.0.1", "--port", str(PORT)]
     if m.get("template"):
         cmd[-4:-4] = ["--chat-template-file", f"/templates/{m['template']}"]
@@ -198,6 +203,7 @@ def _start(model, wait, should_stop):
         # doesn't fit beside the model (measured with Bonsai, 2026-10-19).
         cmd[-4:-4] = ["--mmproj", f"/models/{m['mmproj']}", "--no-mmproj-offload"]
     (LLAMA / "cuda-cache").mkdir(exist_ok=True)
+    (LLAMA / "slots").mkdir(exist_ok=True)
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"couldn't start {name}: {r.stderr.strip()[-300:]}")

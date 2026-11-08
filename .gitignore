@@ -48,3 +48,4 @@ __pycache__/
 
 # personal: who he is, for OpenCode (stays local)
 /opencode/AGENTS.md
+/llamacpp/slots/
